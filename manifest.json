@@ -1,0 +1,22 @@
+{
+  "name": "نظام إدارة الصف الاحترافي",
+  "short_name": "إدارة الصف",
+  "description": "نظام إدارة احترافي للمعلمين لتتبع الطلاب، الحضور، الدرجات والواجبات.",
+  "start_url": "./ادارة الصف.html",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#5D5CDE",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icons/icon-192x192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "icons/icon-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}
