@@ -1,0 +1,29 @@
+name: Transfer Rased v1.0.8
+
+on:
+  push:
+    branches: [ transfer-rased-v108 ]
+    paths:
+      - '.rased-transfer-trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: transfer-rased-v108
+      - name: Download verified APK and commit it
+        shell: bash
+        run: |
+          curl -L --fail --retry 3 'https://tempfile.org/XRKTuw3hb7S/download' -o RasedAlBarr-v1.0.8-unsigned.apk
+          echo '5b9d13333397bc4b14a8067b57a223e7a79c3f46c8055057b170a93feaddc1c8  RasedAlBarr-v1.0.8-unsigned.apk' | sha256sum -c -
+          unzip -t RasedAlBarr-v1.0.8-unsigned.apk >/dev/null
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add RasedAlBarr-v1.0.8-unsigned.apk
+          git commit -m 'Temporary transfer Rased AlBarr v1.0.8 APK'
+          git push origin HEAD:transfer-rased-v108
