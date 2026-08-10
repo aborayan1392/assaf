@@ -1,0 +1,28 @@
+name: Rased v1.0.10 Artifact Transfer
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  transfer:
+    if: startsWith(github.head_ref, 'transfer-rased-v110')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and verify unsigned APK
+        shell: bash
+        run: |
+          curl -L --fail --retry 3 'https://tempfile.org/7t6US9rEzRz/download' -o RasedAlBarr-v1.0.10-unsigned.apk
+          echo 'efc1a82f0dd57d8910361ed11393cb23ee13cd9e113c8a695d3f823812d46876  RasedAlBarr-v1.0.10-unsigned.apk' | sha256sum -c -
+          unzip -t RasedAlBarr-v1.0.10-unsigned.apk >/dev/null
+      - name: Upload transfer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RasedAlBarr-v1.0.10-transfer
+          path: RasedAlBarr-v1.0.10-unsigned.apk
+          if-no-files-found: error
+          retention-days: 1
