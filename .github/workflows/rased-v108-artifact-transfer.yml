@@ -9,12 +9,12 @@ permissions:
 
 jobs:
   transfer:
-    if: github.head_ref == 'transfer-rased-v108'
+    if: startsWith(github.head_ref, 'transfer-rased-v108')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: transfer-rased-v108
+          ref: ${{ github.head_ref }}
       - name: Verify APK
         run: |
           test -s RasedAlBarr-v1.0.8-unsigned.apk
