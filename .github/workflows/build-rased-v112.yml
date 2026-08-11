@@ -27,7 +27,7 @@ jobs:
           mv /tmp/rased-unpack/rased-albarr ./rased-albarr
           test -f rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
       - name: Apply v1.0.12 compact UI patch
-        run: python3 rased-src/apply_v112.py
+        run: python3 rased-src/apply_v112_fixed.py
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
