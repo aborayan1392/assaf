@@ -1,0 +1,35 @@
+name: Inspect Rased v1.0.14 Source
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: github.head_ref == 'build-rased-v114'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build-rased-v114
+      - name: Reconstruct current v1.0.13 source
+        shell: bash
+        run: |
+          cat rased-src/project.part* > /tmp/rased-source.b64
+          base64 -d /tmp/rased-source.b64 > /tmp/rased-source.zip
+          unzip -t /tmp/rased-source.zip >/dev/null
+          rm -rf /tmp/rased-unpack && mkdir -p /tmp/rased-unpack
+          unzip -q /tmp/rased-source.zip -d /tmp/rased-unpack
+          rm -rf rased-albarr
+          mv /tmp/rased-unpack/rased-albarr ./rased-albarr
+          python3 rased-src/apply_v113.py
+          test -f rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          zip -qr /tmp/RasedAlBarr-v1.0.13-source.zip rased-albarr -x '*/build/*'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RasedAlBarr-v1.0.13-source
+          path: /tmp/RasedAlBarr-v1.0.13-source.zip
+          retention-days: 1
