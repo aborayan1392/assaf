@@ -19,7 +19,11 @@ jobs:
       - name: Reconstruct source
         shell: bash
         run: |
+          wc -c rased-src/project.part*
+          sha256sum rased-src/project.part*
           cat rased-src/project.part* > /tmp/rased-source.b64
+          wc -c /tmp/rased-source.b64
+          sha256sum /tmp/rased-source.b64
           base64 -d /tmp/rased-source.b64 > /tmp/rased-source.zip
           unzip -t /tmp/rased-source.zip >/dev/null
           rm -rf /tmp/rased-unpack
