@@ -1,0 +1,48 @@
+name: Inspect Rased v1.0.12 Compact UI
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  inspect:
+    if: github.head_ref == 'build-rased-v112'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build-rased-v112
+      - name: Reconstruct and inspect
+        shell: bash
+        run: |
+          cat rased-src/project.part* > /tmp/rased-source.b64
+          base64 -d /tmp/rased-source.b64 > /tmp/rased-source.zip
+          rm -rf /tmp/rased-unpack && mkdir -p /tmp/rased-unpack
+          unzip -q /tmp/rased-source.zip -d /tmp/rased-unpack
+          rm -rf rased-albarr && mv /tmp/rased-unpack/rased-albarr ./rased-albarr
+          python3 rased-src/apply_v111.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt')
+          lines=p.read_text().splitlines()
+          keys=['راصد البرية','أدوات الرصد','ic_settings','buildToolsBody','toolsBody','tools']
+          hit=[]
+          for i,l in enumerate(lines):
+              if any(k in l for k in keys):
+                  hit.append(i)
+          ranges=[]
+          for i in hit:
+              a=max(0,i-25); b=min(len(lines),i+45)
+              if not ranges or a>ranges[-1][1]: ranges.append([a,b])
+              else: ranges[-1][1]=max(ranges[-1][1],b)
+          out=[]
+          for a,b in ranges:
+              out.append(f'--- lines {a+1}-{b} ---')
+              out.extend(f'{j+1:04d}: {lines[j]}' for j in range(a,b))
+          Path('compact-snippets.txt').write_text('\n'.join(out))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compact-snippets
+          path: compact-snippets.txt
+          retention-days: 1
