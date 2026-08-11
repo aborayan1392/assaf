@@ -1,0 +1,63 @@
+name: Build Rased v1.0.13
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.head_ref == 'build-rased-v113'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build-rased-v113
+      - name: Reconstruct source
+        shell: bash
+        run: |
+          cat rased-src/project.part* > /tmp/rased-source.b64
+          base64 -d /tmp/rased-source.b64 > /tmp/rased-source.zip
+          unzip -t /tmp/rased-source.zip >/dev/null
+          rm -rf /tmp/rased-unpack && mkdir -p /tmp/rased-unpack
+          unzip -q /tmp/rased-source.zip -d /tmp/rased-unpack
+          rm -rf rased-albarr
+          mv /tmp/rased-unpack/rased-albarr ./rased-albarr
+          test -f rased-albarr/app/src/main/java/com/aboryan/rased/albarr/ObservationPrintAdapter.kt
+      - name: Apply v1.0.13 RTL print patch
+        run: python3 rased-src/apply_v113.py
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Add Cairo font
+        shell: bash
+        run: |
+          mkdir -p rased-albarr/app/src/main/assets/fonts
+          curl -L --fail --retry 3 'https://raw.githubusercontent.com/google/fonts/main/ofl/cairo/Cairo%5Bslnt,wght%5D.ttf' -o rased-albarr/app/src/main/assets/fonts/Cairo.ttf
+          test -s rased-albarr/app/src/main/assets/fonts/Cairo.ttf
+      - name: Build release APK
+        run: gradle -p rased-albarr :app:assembleRelease --stacktrace
+      - name: Verify unsigned APK
+        shell: bash
+        run: |
+          APK='rased-albarr/app/build/outputs/apk/release/app-release-unsigned.apk'
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          unzip -l "$APK" | grep -q 'classes.dex'
+          unzip -l "$APK" | grep -q 'resources.arsc'
+          unzip -l "$APK" | grep -q 'assets/fonts/Cairo.ttf'
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RasedAlBarr-v1.0.13-unsigned
+          path: rased-albarr/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 1
