@@ -1,0 +1,174 @@
+from pathlib import Path
+
+main = Path('rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt')
+s = main.read_text()
+
+def one(old, new, label):
+    global s
+    c = s.count(old)
+    if c != 1:
+        raise SystemExit(f'{label}: expected 1 target, found {c}')
+    s = s.replace(old, new, 1)
+
+one('import android.graphics.Color\nimport android.graphics.Typeface\n', 'import android.graphics.Bitmap\nimport android.graphics.BitmapFactory\nimport android.graphics.Color\nimport android.graphics.Typeface\n', 'bitmap imports')
+one('import android.provider.MediaStore\n', 'import android.provider.MediaStore\nimport android.util.LruCache\n', 'lru import')
+one('import java.text.SimpleDateFormat\n', 'import java.io.FileInputStream\nimport java.io.InputStream\nimport java.text.SimpleDateFormat\n', 'stream imports')
+one('import java.util.Locale\n', 'import java.util.Locale\nimport java.util.concurrent.Executors\n', 'executor import')
+
+one('    private var quickCapturePending = false\n', '''    private var quickCapturePending = false
+
+    private val imageExecutor = Executors.newFixedThreadPool(2)
+    private val imageCache = object : LruCache<String, Bitmap>(16 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+    }
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private var searchRefreshRunnable: Runnable? = null
+    private var cachedTripNames: List<String> = emptyList()
+    private var listRenderGeneration = 0
+''', 'performance fields')
+
+one('    override fun onBackPressed() {\n', '''    override fun onDestroy() {
+        searchRefreshRunnable?.let { uiHandler.removeCallbacks(it) }
+        pendingLocationListener?.let { listener -> runCatching { (getSystemService(LOCATION_SERVICE) as LocationManager).removeUpdates(listener) } }
+        imageExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
+    override fun onBackPressed() {
+''', 'onDestroy')
+
+one('''    private fun showHome() {
+        currentScreen = "home"
+        if (selectedTrip != "كل الرحلات" && selectedTrip !in db.tripNames()) selectedTrip = "كل الرحلات"
+''', '''    private fun showHome() {
+        currentScreen = "home"
+        cachedTripNames = db.tripNames()
+        if (selectedTrip != "كل الرحلات" && selectedTrip !in cachedTripNames) selectedTrip = "كل الرحلات"
+''', 'trip cache')
+
+one('''        val stats = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 3f }
+        stats.addView(statCard(db.totalCount().toString(), "الرصد", R.drawable.ic_explore, TEAL), LinearLayout.LayoutParams(0, dp(74), 1f).apply { marginEnd = dp(5) })
+        stats.addView(statCard(db.locatedCount().toString(), "المواقع", R.drawable.ic_location, GREEN), LinearLayout.LayoutParams(0, dp(74), 1f).apply { setMargins(dp(5),0,dp(5),0) })
+        stats.addView(statCard(db.favoriteCount().toString(), "المميزة", R.drawable.ic_star, GOLD), LinearLayout.LayoutParams(0, dp(74), 1f).apply { marginStart = dp(5) })
+''', '''        val (totalCount, locatedCount, favoriteCount) = db.dashboardCounts()
+        val stats = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 3f }
+        stats.addView(statCard(totalCount.toString(), "الرصد", R.drawable.ic_explore, TEAL), LinearLayout.LayoutParams(0, dp(74), 1f).apply { marginEnd = dp(5) })
+        stats.addView(statCard(locatedCount.toString(), "المواقع", R.drawable.ic_location, GREEN), LinearLayout.LayoutParams(0, dp(74), 1f).apply { setMargins(dp(5),0,dp(5),0) })
+        stats.addView(statCard(favoriteCount.toString(), "المميزة", R.drawable.ic_star, GOLD), LinearLayout.LayoutParams(0, dp(74), 1f).apply { marginStart = dp(5) })
+''', 'single stats query')
+
+one('            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { searchQuery = s?.toString().orEmpty(); refreshList() }\n', '''            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                searchQuery = s?.toString().orEmpty()
+                searchRefreshRunnable?.let { uiHandler.removeCallbacks(it) }
+                searchRefreshRunnable = Runnable { if (currentScreen == "home") refreshList() }
+                uiHandler.postDelayed(searchRefreshRunnable!!, 220L)
+            }
+''', 'search debounce')
+one('        if (db.tripNames().isNotEmpty()) {\n            val tripFilter =', '        if (cachedTripNames.isNotEmpty()) {\n            val tripFilter =', 'trip query reuse')
+
+start = s.index('    private fun refreshList() {')
+end = s.index('    private fun observationCard(item: Observation): View {', start)
+s = s[:start] + '''    private fun refreshList() {
+        val container = listContainer ?: return
+        val items = db.list(searchQuery, selectedCategory, favoritesOnly, selectedTrip)
+        val generation = ++listRenderGeneration
+        countLabel?.text = "${items.size} رصد"
+        container.removeAllViews()
+        if (items.isEmpty()) {
+            val empty = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(20), dp(70), dp(20), dp(60)) }
+            empty.addView(iconView(R.drawable.ic_explore, Color.rgb(160, 171, 165), 64), LinearLayout.LayoutParams(dp(72), dp(72)))
+            empty.addView(text("لا توجد أرصاد مطابقة", 18f, MUTED, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(14), 0, 0) })
+            container.addView(empty, LinearLayout.LayoutParams(-1, -2))
+            return
+        }
+        fun renderChunk(startIndex: Int) {
+            if (generation != listRenderGeneration || currentScreen != "home" || listContainer !== container) return
+            val endIndex = minOf(startIndex + 12, items.size)
+            for (i in startIndex until endIndex) container.addView(observationCard(items[i]), LinearLayout.LayoutParams(-1, dp(150)).apply { setMargins(0, 0, 0, dp(12)) })
+            if (endIndex < items.size) uiHandler.post { renderChunk(endIndex) }
+        }
+        renderChunk(0)
+    }
+
+''' + s[end:]
+
+one('            loadImage(this, item.imageUri)\n', '            loadImage(this, item.imageUri, 320)\n', 'list image target')
+one('loadImage(this, item.imageUri) }', 'loadImage(this, item.imageUri, 960) }', 'detail image target')
+one('loadImage(this, uri)\n                    setOnClickListener { loadImage(detailImage, uri) }', 'loadImage(this, uri, 180)\n                    setOnClickListener { loadImage(detailImage, uri, 960) }', 'detail thumbs')
+one('loadImage(this, formImageUri)', 'loadImage(this, formImageUri, 900)', 'form image')
+one('formImageView?.let { loadImage(it, formImageUri) }', 'formImageView?.let { loadImage(it, formImageUri, 900) }', 'form refresh')
+marker = s.index('    private fun refreshFormImages()')
+pos = s.index('loadImage(this, uri)', marker)
+s = s[:pos] + 'loadImage(this, uri, 180)' + s[pos + len('loadImage(this, uri)'):]
+
+one('wrap.addView(text("الإصدار 1.0.14", 12f, Color.rgb(150, 158, 154), false).apply { gravity = Gravity.CENTER; setPadding(0, dp(16), 0, 0) })', 'wrap.addView(text("الإصدار 1.0.15   |   برمجة : ابوريان الغامدي", 12f, Color.rgb(150, 158, 154), true).apply { gravity = Gravity.CENTER; setPadding(0, dp(16), 0, 0) })', 'credit')
+
+start = s.index('    private fun loadImage(view: ImageView, uriString: String)')
+end = s.index('    private fun date(ms: Long): String', start)
+s = s[:start] + '''    private fun loadImage(view: ImageView, uriString: String, targetPx: Int = 640) {
+        view.tag = uriString
+        if (uriString.isBlank()) { showImagePlaceholder(view); return }
+        val bucket = when { targetPx <= 200 -> 200; targetPx <= 360 -> 360; targetPx <= 720 -> 720; else -> 1080 }
+        val cacheKey = "$uriString@$bucket"
+        imageCache.get(cacheKey)?.let { bitmap ->
+            if (view.tag == uriString) { view.clearColorFilter(); view.scaleType = ImageView.ScaleType.CENTER_CROP; view.setImageBitmap(bitmap) }
+            return
+        }
+        showImagePlaceholder(view)
+        imageExecutor.execute {
+            val bitmap = decodeSampledBitmap(uriString, bucket)
+            if (bitmap != null) imageCache.put(cacheKey, bitmap)
+            view.post {
+                if (view.tag != uriString) return@post
+                if (bitmap != null) { view.clearColorFilter(); view.scaleType = ImageView.ScaleType.CENTER_CROP; view.setImageBitmap(bitmap) } else showImagePlaceholder(view)
+            }
+        }
+    }
+
+    private fun showImagePlaceholder(view: ImageView) {
+        view.setImageResource(R.drawable.ic_photo); view.setColorFilter(Color.rgb(162, 174, 168)); view.scaleType = ImageView.ScaleType.CENTER_INSIDE
+    }
+
+    private fun openImageStream(uriString: String): InputStream? = try {
+        val uri = Uri.parse(uriString)
+        when (uri.scheme?.lowercase(Locale.US)) {
+            "file" -> uri.path?.let { FileInputStream(it) }
+            "content" -> contentResolver.openInputStream(uri)
+            null, "" -> FileInputStream(uriString)
+            else -> contentResolver.openInputStream(uri)
+        }
+    } catch (_: Exception) { null }
+
+    private fun decodeSampledBitmap(uriString: String, targetPx: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        openImageStream(uriString)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        val maxDimension = maxOf(bounds.outWidth, bounds.outHeight)
+        while (maxDimension / (sample * 2) >= targetPx) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample.coerceAtLeast(1); inPreferredConfig = Bitmap.Config.ARGB_8888 }
+        return openImageStream(uriString)?.use { BitmapFactory.decodeStream(it, null, options) }
+    }
+
+''' + s[end:]
+main.write_text(s)
+
+db = Path('rased-albarr/app/src/main/java/com/aboryan/rased/albarr/ObservationDb.kt')
+ds = db.read_text()
+target = '    fun totalCount(): Int = scalar("SELECT COUNT(*) FROM $TABLE")\n'
+if ds.count(target) != 1: raise SystemExit('dashboard target mismatch')
+ds = ds.replace(target, '''    fun dashboardCounts(): Triple<Int, Int, Int> = readableDatabase.rawQuery(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN favorite=1 THEN 1 ELSE 0 END),0) FROM $TABLE",
+        null
+    ).use { c -> if (c.moveToFirst()) Triple(c.getInt(0), c.getInt(1), c.getInt(2)) else Triple(0, 0, 0) }
+
+    fun totalCount(): Int = scalar("SELECT COUNT(*) FROM $TABLE")
+''', 1)
+db.write_text(ds)
+
+g = Path('rased-albarr/app/build.gradle')
+gs = g.read_text()
+if 'versionCode 14' not in gs: raise SystemExit('Expected v1.0.14 before bump')
+g.write_text(gs.replace('versionCode 14', 'versionCode 15').replace("versionName '1.0.14'", "versionName '1.0.15'"))
+
+print('v1.0.15 performance patch applied')
