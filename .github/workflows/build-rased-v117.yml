@@ -1,0 +1,98 @@
+name: Build Rased v1.0.17
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.head_ref == 'build-rased-v117'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build-rased-v117
+
+      - name: Reconstruct latest verified source
+        shell: bash
+        run: |
+          cat v116zip/part* > /tmp/rased-source.b64
+          base64 -d /tmp/rased-source.b64 > /tmp/rased-source.zip
+          unzip -t /tmp/rased-source.zip >/dev/null
+          rm -rf /tmp/rased-unpack && mkdir -p /tmp/rased-unpack
+          unzip -q /tmp/rased-source.zip -d /tmp/rased-unpack
+          rm -rf rased-albarr
+          mv /tmp/rased-unpack/rased-albarr ./rased-albarr
+          grep -E 'versionCode|versionName' rased-albarr/app/build.gradle
+
+      - name: Bring source to v1.0.16 baseline
+        shell: bash
+        run: |
+          CODE=$(grep -oE 'versionCode[[:space:]]+[0-9]+' rased-albarr/app/build.gradle | awk '{print $2}')
+          echo "Detected versionCode=$CODE"
+          if [ "$CODE" = "14" ]; then
+            python3 v116-files/apply_v115_performance.py
+            python3 v116-files/apply_v116.py
+          elif [ "$CODE" = "15" ]; then
+            python3 v116-files/apply_v116.py
+          elif [ "$CODE" = "16" ]; then
+            echo 'Already at v1.0.16 baseline'
+          else
+            echo "Unexpected source versionCode: $CODE" >&2
+            exit 1
+          fi
+
+      - name: Apply v1.0.17 compact cards
+        run: python3 v117-files/apply_v117.py
+
+      - name: Source assertions
+        shell: bash
+        run: |
+          grep -q 'versionCode 17' rased-albarr/app/build.gradle
+          grep -q "versionName '1.0.17'" rased-albarr/app/build.gradle
+          grep -q 'dp(132)' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'LinearLayout.LayoutParams(dp(108), -1)' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'برمجة : ابوريان الغامدي' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'الارتفاع عن سطح البحر' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Add Cairo font
+        shell: bash
+        run: |
+          mkdir -p rased-albarr/app/src/main/assets/fonts
+          curl -L --fail --retry 3 'https://raw.githubusercontent.com/google/fonts/main/ofl/cairo/Cairo%5Bslnt,wght%5D.ttf' -o rased-albarr/app/src/main/assets/fonts/Cairo.ttf
+          test -s rased-albarr/app/src/main/assets/fonts/Cairo.ttf
+
+      - name: Build release APK
+        run: gradle -p rased-albarr :app:assembleRelease --stacktrace
+
+      - name: Verify unsigned APK
+        shell: bash
+        run: |
+          APK='rased-albarr/app/build/outputs/apk/release/app-release-unsigned.apk'
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          unzip -l "$APK" | grep -q 'classes.dex'
+          unzip -l "$APK" | grep -q 'resources.arsc'
+          unzip -l "$APK" | grep -q 'assets/fonts/Cairo.ttf'
+          sha256sum "$APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RasedAlBarr-v1.0.17-unsigned
+          path: rased-albarr/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 1
