@@ -16,34 +16,48 @@ jobs:
         with:
           ref: build-rased-v117
 
-      - name: Reconstruct latest verified source
+      - name: Reconstruct verified v1.0.13 source
         shell: bash
         run: |
-          cat v116zip/part* > /tmp/rased-source.b64
+          cat rased-src/project.part* > /tmp/rased-source.b64
           base64 -d /tmp/rased-source.b64 > /tmp/rased-source.zip
           unzip -t /tmp/rased-source.zip >/dev/null
           rm -rf /tmp/rased-unpack && mkdir -p /tmp/rased-unpack
           unzip -q /tmp/rased-source.zip -d /tmp/rased-unpack
           rm -rf rased-albarr
           mv /tmp/rased-unpack/rased-albarr ./rased-albarr
-          grep -E 'versionCode|versionName' rased-albarr/app/build.gradle
+          python3 rased-src/apply_v113.py
 
-      - name: Bring source to v1.0.16 baseline
+      - name: Reapply v1.0.14 field features
         shell: bash
         run: |
-          CODE=$(grep -oE 'versionCode[[:space:]]+[0-9]+' rased-albarr/app/build.gradle | awk '{print $2}')
-          echo "Detected versionCode=$CODE"
-          if [ "$CODE" = "14" ]; then
-            python3 v116-files/apply_v115_performance.py
-            python3 v116-files/apply_v116.py
-          elif [ "$CODE" = "15" ]; then
-            python3 v116-files/apply_v116.py
-          elif [ "$CODE" = "16" ]; then
-            echo 'Already at v1.0.16 baseline'
-          else
-            echo "Unexpected source versionCode: $CODE" >&2
-            exit 1
-          fi
+          cp v114-files/Observation.kt rased-albarr/app/src/main/java/com/aboryan/rased/albarr/Observation.kt
+          cp v114-files/ObservationDb.kt rased-albarr/app/src/main/java/com/aboryan/rased/albarr/ObservationDb.kt
+          cp v114-files/BackupManager.kt rased-albarr/app/src/main/java/com/aboryan/rased/albarr/BackupManager.kt
+          cp v114-files/ObservationPrintAdapter.kt rased-albarr/app/src/main/java/com/aboryan/rased/albarr/ObservationPrintAdapter.kt
+          python3 v114-files/apply_main_v114.py
+          python3 - <<'PY'
+          from pathlib import Path
+          g = Path('rased-albarr/app/build.gradle')
+          s = g.read_text()
+          if "versionCode 13" not in s or "versionName '1.0.13'" not in s:
+              raise SystemExit('Unexpected version before v1.0.14 bump')
+          s = s.replace('versionCode 13', 'versionCode 14').replace("versionName '1.0.13'", "versionName '1.0.14'")
+          if 'dependencies {' not in s:
+              s += "\n\ndependencies {\n    implementation 'com.google.zxing:core:3.5.3'\n}\n"
+          g.write_text(s)
+          m = Path('rased-albarr/app/src/main/AndroidManifest.xml')
+          ms = m.read_text()
+          if 'android.permission.INTERNET' not in ms:
+              ms = ms.replace('    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n', '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.INTERNET" />\n')
+          m.write_text(ms)
+          PY
+
+      - name: Reapply v1.0.15 performance improvements
+        run: python3 v116-files/apply_v115_performance.py
+
+      - name: Reapply v1.0.16 altitude visibility
+        run: python3 v116-files/apply_v116.py
 
       - name: Apply v1.0.17 compact cards
         run: python3 v117-files/apply_v117.py
@@ -57,6 +71,8 @@ jobs:
           grep -q 'LinearLayout.LayoutParams(dp(108), -1)' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
           grep -q 'برمجة : ابوريان الغامدي' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
           grep -q 'الارتفاع عن سطح البحر' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'Executors.newFixedThreadPool' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'DB_VERSION = 2' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/ObservationDb.kt
 
       - name: Set up Java
         uses: actions/setup-java@v4
