@@ -1,0 +1,1 @@
+Trigger export of official apksig 8.9.0 for local signing of v1.0.16.
