@@ -62,7 +62,7 @@ jobs:
       - name: Apply v1.0.18 precision location patch
         shell: bash
         run: |
-          base64 -d v118-files/apply_v118.py.gz.b64 | gzip -d > /tmp/apply_v118.py
+          cat v118-files/patch.part* | base64 -d | gzip -d > /tmp/apply_v118.py
           python3 /tmp/apply_v118.py
 
       - name: Source assertions
@@ -76,6 +76,7 @@ jobs:
           grep -q 'GPS دقيق' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
           grep -q 'دقة الارتفاع' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
           grep -q 'core-location-altitude:1.0.0' rased-albarr/app/build.gradle
+          grep -q 'android.useAndroidX=true' rased-albarr/gradle.properties
 
       - name: Set up Java
         uses: actions/setup-java@v4
