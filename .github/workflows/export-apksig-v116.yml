@@ -1,0 +1,29 @@
+name: Export apksig v1.0.16
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'build-rased-v116'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build-rased-v116
+      - name: Download official Android apksig library
+        shell: bash
+        run: |
+          curl -L --fail --retry 3 'https://dl.google.com/dl/android/maven2/com/android/tools/build/apksig/8.9.0/apksig-8.9.0.jar' -o /tmp/apksig-8.9.0.jar
+          test -s /tmp/apksig-8.9.0.jar
+          sha256sum /tmp/apksig-8.9.0.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apksig-8.9.0
+          path: /tmp/apksig-8.9.0.jar
+          if-no-files-found: error
+          retention-days: 1
