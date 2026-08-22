@@ -1,0 +1,246 @@
+            gravity = Gravity.RIGHT
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        })
+
+        val chips = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, dp(5))
+        }
+        chips.addView(metaChip(item.category, categorySoftColor(item.category), accent, 11.4f))
+        chips.addView(metaChip(item.rarity, raritySoftColor(item.rarity), rarityColor(item.rarity), 11.4f),
+            LinearLayout.LayoutParams(-2, dp(28)).apply { marginStart = dp(6) })
+        texts.addView(chips)
+
+        val loc = when {
+            item.placeName.isNotBlank() -> item.placeName
+            item.latitude != null && item.longitude != null -> String.format(Locale.US, "%.4f, %.4f", item.latitude, item.longitude)
+            else -> "بدون موقع مسجل"
+        }
+        val locRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        locRow.addView(iconView(R.drawable.ic_location, TEAL, 17), LinearLayout.LayoutParams(dp(20), dp(20)))
+        locRow.addView(text(loc, 12.4f, MUTED, false).apply {
+            gravity = Gravity.RIGHT
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        texts.addView(locRow)
+
+        val bottomMeta = buildString {
+            append(date(item.createdAt))
+            item.altitude?.let { append("  •  ↑ ${String.format(Locale.US, "%,.0f", it)} م") }
+            if (item.tripName.isNotBlank()) append("  •  ${item.tripName}")
+        }
+        texts.addView(text(bottomMeta, 11.5f, Color.rgb(125, 137, 131), true).apply {
+            gravity = Gravity.RIGHT
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, dp(6), 0, 0)
+        })
+
+        card.addView(texts, LinearLayout.LayoutParams(0, -1, 1f))
+        card.addView(iconView(R.drawable.ic_chevron_left, Color.rgb(143, 157, 150), 21), LinearLayout.LayoutParams(dp(26), dp(26)))
+        return card
+    }
+
+
+    private fun showDetail(id: Long) {
+        val item = db.get(id) ?: run { showHome(); return }
+        currentScreen = "detail"
+        val root = rootLayout()
+        root.addView(simpleTopBar("تفاصيل الرصد") { showHome() })
+
+        val scroll = ScrollView(this).apply {
+            clipToPadding = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(30))
+        }
+        scroll.addView(body)
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val hero = FrameLayout(this).apply {
+            background = rounded(Color.rgb(237, 240, 235), 22f)
+            clipToOutline = true
+            elevation = dp(1).toFloat()
+        }
+        val detailImage = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded(Color.rgb(237, 240, 235), 22f)
+            clipToOutline = true
+            loadImage(this, item.imageUri, 1080)
+        }
+        hero.addView(detailImage, FrameLayout.LayoutParams(-1, -1))
+        val numberBadge = metaChip("#${item.id}", Color.argb(232, 19, 55, 43), Color.WHITE, 11.8f)
+        hero.addView(numberBadge, FrameLayout.LayoutParams(-2, dp(31), Gravity.RIGHT or Gravity.TOP).apply {
+            rightMargin = dp(10)
+            topMargin = dp(10)
+        })
+        body.addView(hero, LinearLayout.LayoutParams(-1, dp(270)))
+
+        val detailImages = item.allImages()
+        if (detailImages.size > 1) {
+            val strip = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(8), 0, dp(2))
+            }
+            detailImages.forEachIndexed { index, uri ->
+                val thumb = ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    background = rounded(
+                        if (index == 0) MIST else Color.rgb(238, 240, 236),
+                        11f,
+                        strokeColor = if (index == 0) GREEN else LINE
+                    )
+                    clipToOutline = true
+                    loadImage(this, uri, 180)
+                    setOnClickListener { loadImage(detailImage, uri, 1080) }
+                }
+                strip.addView(thumb, LinearLayout.LayoutParams(dp(70), dp(70)).apply { marginEnd = dp(7) })
+            }
+            val hs = HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(strip)
+            }
+            body.addView(hs, LinearLayout.LayoutParams(-1, dp(82)))
+        }
+
+        val summary = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(CARD, 20f, strokeColor = LINE)
+            setPadding(dp(15), dp(14), dp(15), dp(14))
+            elevation = dp(1).toFloat()
+        }
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        titleRow.addView(text(item.title.ifBlank { "بدون عنوان" }, 24f, INK, true).apply {
+            gravity = Gravity.RIGHT
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        val favBtn = iconButton(R.drawable.ic_star, if (item.favorite) GOLD else Color.rgb(146, 157, 151), 44).apply {
+            background = circle(if (item.favorite) Color.rgb(249, 241, 225) else Color.rgb(244, 244, 240))
+            setOnClickListener {
+                db.save(item.copy(favorite = !item.favorite))
+                showDetail(id)
+            }
+        }
+        titleRow.addView(favBtn, LinearLayout.LayoutParams(dp(46), dp(46)))
+        summary.addView(titleRow)
+
+        val chips = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.RIGHT
+            setPadding(0, dp(8), 0, 0)
+        }
+        chips.addView(metaChip(item.category, categorySoftColor(item.category), categoryColor(item.category), 12.2f))
+        chips.addView(metaChip(item.rarity, raritySoftColor(item.rarity), rarityColor(item.rarity), 12.2f),
+            LinearLayout.LayoutParams(-2, dp(31)).apply { marginStart = dp(7) })
+        summary.addView(chips)
+
+        if (item.quickDraft) {
+            summary.addView(text("مسودة رصد سريع — أكمل البيانات من زر التعديل", 12.2f, GOLD, true).apply {
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(8), 0, 0)
+            })
+        }
+        body.addView(summary, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+
+        val observationRows = mutableListOf<Pair<String, String>>()
+        observationRows += "الوصف" to item.description.ifBlank { "لا يوجد وصف مضاف" }
+        if (item.notes.isNotBlank()) observationRows += "الملاحظات" to item.notes
+        if (item.tags.isNotBlank()) observationRows += "الوسوم" to item.tags
+        if (item.tripName.isNotBlank()) observationRows += "الرحلة" to item.tripName
+        body.addView(sectionCard("بيانات الرصد", observationRows))
+
+        val loc = when {
+            item.latitude != null && item.longitude != null ->
+                "${item.placeName.ifBlank { "موقع مسجل" }}\n${String.format(Locale.US, "%.6f, %.6f", item.latitude, item.longitude)}"
+            item.placeName.isNotBlank() -> item.placeName
+            else -> "لا يوجد موقع مسجل"
+        }
+        val locationRows = mutableListOf<Pair<String, String>>()
+        locationRows += "الموقع" to loc
+        item.altitude?.let {
+            val altitudeLabel = if (item.altitudeReference == "MSL") "الارتفاع عن سطح البحر" else "الارتفاع المسجل"
+            val altitudeAcc = item.altitudeAccuracy?.let { acc -> "  (±${acc.toInt()} م)" }.orEmpty()
+            locationRows += altitudeLabel to "${String.format(Locale.US, "%,.0f", it)} متر$altitudeAcc"
+        }
+        val gpsDetails = gpsDetailsText(item)
+        if (gpsDetails.isNotBlank()) locationRows += "دقة GPS" to gpsDetails
+        locationRows += "تاريخ الرصد" to dateTime(item.createdAt)
+        body.addView(sectionCard("الموقع والقياسات", locationRows))
+
+        val grid1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, 0)
+        }
+        grid1.addView(actionButton("فتح الموقع", R.drawable.ic_location, TEAL, Color.WHITE).apply {
+            setOnClickListener { openMap(item) }
+        }, LinearLayout.LayoutParams(0, dp(54), 1f).apply { marginEnd = dp(5) })
+        grid1.addView(actionButton("تعديل", R.drawable.ic_edit, GREEN, Color.WHITE).apply {
+            setOnClickListener { showForm(item) }
+        }, LinearLayout.LayoutParams(0, dp(54), 1f).apply { marginStart = dp(5) })
+        body.addView(grid1)
+
+        val grid2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(9), 0, 0)
+        }
+        grid2.addView(actionButton("مشاركة", R.drawable.ic_share, Color.rgb(68, 109, 151), Color.WHITE).apply {
+            setOnClickListener { share(item) }
+        }, LinearLayout.LayoutParams(0, dp(54), 1f).apply { marginEnd = dp(5) })
+        grid2.addView(actionButton("طباعة التقرير", R.drawable.ic_print, GOLD, Color.WHITE).apply {
+            setOnClickListener { printItems(listOf(item), true) }
+        }, LinearLayout.LayoutParams(0, dp(54), 1f).apply { marginStart = dp(5) })
+        body.addView(grid2)
+
+        val delete = actionButton("حذف الرصد", R.drawable.ic_delete, Color.TRANSPARENT, RED).apply {
+            background = rounded(Color.TRANSPARENT, 16f, strokeColor = Color.rgb(218, 171, 166), strokeWidth = 1)
+            setOnClickListener { confirmDelete(item) }
+        }
+        body.addView(delete, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(13) })
+        setContentView(root)
+    }
+
+    private fun showForm(existing: Observation?) {
+        currentScreen = "form"
+        editingId = existing?.id ?: 0L
+        formImageUris.clear()
+        formImageUris.addAll(existing?.allImages().orEmpty())
+        formImageUri = formImageUris.firstOrNull().orEmpty()
+        formLat = existing?.latitude
+        formLon = existing?.longitude
+        formAltitude = existing?.altitude
+        formAccuracy = existing?.accuracy
+        formAltitudeAccuracy = existing?.altitudeAccuracy
+        formAltitudeReference = existing?.altitudeReference.orEmpty()
+        formLocationCapturedAt = existing?.locationCapturedAt
+        formLocationProvider = existing?.locationProvider.orEmpty()
+
+        val root = rootLayout()
+        root.addView(simpleTopBar(if (existing == null) "إضافة رصد جديد" else "تعديل الرصد") { showHome() })
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        }
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(14), dp(18), dp(32)) }
+        scroll.addView(body)
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        formImageView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP; background = rounded(Color.rgb(238, 240, 236), 20f)
+            loadImage(this, formImageUri, 900)
+        }
+        body.addView(formImageView, LinearLayout.LayoutParams(-1, dp(245)))
+        formImageStrip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(7), 0, 0) }
+        val imageScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(formImageStrip) }
