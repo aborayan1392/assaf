@@ -1,0 +1,162 @@
+name: Build Rased v1.1.2 Temporary
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.head_ref == 'rased-v112-folding-header-20260822'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout v1.1.2 build branch
+        uses: actions/checkout@v4
+        with:
+          ref: rased-v112-folding-header-20260822
+
+      - name: Reconstruct verified Rased source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat rased-src/project.part* > /tmp/rased-source.b64
+          base64 -d /tmp/rased-source.b64 > /tmp/rased-source.zip
+          unzip -t /tmp/rased-source.zip >/dev/null
+          rm -rf /tmp/rased-unpack && mkdir -p /tmp/rased-unpack
+          unzip -q /tmp/rased-source.zip -d /tmp/rased-unpack
+          rm -rf rased-albarr
+          mv /tmp/rased-unpack/rased-albarr ./rased-albarr
+          python3 rased-src/apply_v113.py
+
+      - name: Reapply v1.0.14 field features
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp v114-files/Observation.kt rased-albarr/app/src/main/java/com/aboryan/rased/albarr/Observation.kt
+          cp v114-files/ObservationDb.kt rased-albarr/app/src/main/java/com/aboryan/rased/albarr/ObservationDb.kt
+          cp v114-files/BackupManager.kt rased-albarr/app/src/main/java/com/aboryan/rased/albarr/BackupManager.kt
+          cp v114-files/ObservationPrintAdapter.kt rased-albarr/app/src/main/java/com/aboryan/rased/albarr/ObservationPrintAdapter.kt
+          python3 v114-files/apply_main_v114.py
+          python3 - <<'PY'
+          from pathlib import Path
+          g = Path('rased-albarr/app/build.gradle')
+          s = g.read_text().replace('versionCode 13', 'versionCode 14').replace("versionName '1.0.13'", "versionName '1.0.14'")
+          if 'dependencies {' not in s:
+              s += "\n\ndependencies {\n    implementation 'com.google.zxing:core:3.5.3'\n}\n"
+          g.write_text(s)
+          m = Path('rased-albarr/app/src/main/AndroidManifest.xml')
+          ms = m.read_text()
+          if 'android.permission.INTERNET' not in ms:
+              ms = ms.replace('    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n', '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.INTERNET" />\n')
+          m.write_text(ms)
+          PY
+
+      - name: Reapply v1.0.15 to v1.0.18 improvements
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 v116-files/apply_v115_performance.py
+          python3 v116-files/apply_v116.py
+          python3 v117-files/apply_v117.py
+          cat v118-files/patch.part* | base64 -d | gzip -d > /tmp/apply_v118.py
+          python3 /tmp/apply_v118.py
+
+      - name: Apply v1.1.0 visual identity
+        run: python3 v110-files/apply_v110.py
+
+      - name: Apply v1.1.1 font and scale refinements
+        run: python3 v111-files/apply_v111.py
+
+      - name: Apply v1.1.2 folding header
+        run: python3 v112-files/apply_v112.py
+
+      - name: Verify v1.1.2 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'versionCode 21' rased-albarr/app/build.gradle
+          grep -q "versionName '1.1.2'" rased-albarr/app/build.gradle
+          grep -q "applicationId 'com.aboryan.rased.albarr'" rased-albarr/app/build.gradle
+          grep -q 'DB_VERSION = 3' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/ObservationDb.kt
+          grep -q 'private const val UI_SCALE = 0.94f' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'font_choice' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'home_top_collapsed' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'ValueAnimator.ofInt' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'إظهار الأعلى' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'الإصدار 1.1.2' rased-albarr/app/src/main/java/com/aboryan/rased/albarr/MainActivity.kt
+          grep -q 'android.useAndroidX=true' rased-albarr/gradle.properties
+
+      - name: Package source without bundled font
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e rased-albarr/app/src/main/assets/fonts/Cairo.ttf
+          rm -f /tmp/RasedAlBarr-v1.1.2-Source.zip
+          zip -qr /tmp/RasedAlBarr-v1.1.2-Source.zip rased-albarr
+          unzip -tq /tmp/RasedAlBarr-v1.1.2-Source.zip
+          sha256sum /tmp/RasedAlBarr-v1.1.2-Source.zip
+
+      - name: Upload Rased v1.1.2 source
+        uses: actions/upload-artifact@v4
+        with:
+          name: RasedAlBarr-v1.1.2-Source
+          path: /tmp/RasedAlBarr-v1.1.2-Source.zip
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Add Cairo font for APK build only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rased-albarr/app/src/main/assets/fonts
+          curl -L --fail --retry 3 'https://raw.githubusercontent.com/google/fonts/main/ofl/cairo/Cairo%5Bslnt,wght%5D.ttf' -o rased-albarr/app/src/main/assets/fonts/Cairo.ttf
+          test -s rased-albarr/app/src/main/assets/fonts/Cairo.ttf
+
+      - name: Build release APK
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle -p rased-albarr :app:assembleRelease --stacktrace 2>&1 | tee /tmp/rased-v112-build.log
+
+      - name: Verify release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='rased-albarr/app/build/outputs/apk/release/app-release-unsigned.apk'
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          unzip -l "$APK" | grep -q 'classes.dex'
+          unzip -l "$APK" | grep -q 'resources.arsc'
+          unzip -l "$APK" | grep -q 'assets/fonts/Cairo.ttf'
+          sha256sum "$APK"
+
+      - name: Upload Rased v1.1.2 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RasedAlBarr-v1.1.2-unsigned
+          path: rased-albarr/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RasedAlBarr-v1.1.2-build-log
+          path: /tmp/rased-v112-build.log
+          if-no-files-found: ignore
+          retention-days: 1
