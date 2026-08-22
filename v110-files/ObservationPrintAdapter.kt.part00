@@ -1,0 +1,296 @@
+package com.aboryan.rased.albarr
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.Typeface
+import android.net.Uri
+import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.ParcelFileDescriptor
+import android.print.PageRange
+import android.print.PrintAttributes
+import android.print.PrintDocumentAdapter
+import android.print.PrintDocumentInfo
+import android.print.pdf.PrintedPdfDocument
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextDirectionHeuristics
+import android.text.TextPaint
+import android.text.TextUtils
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.EnumMap
+import java.util.Locale
+import kotlin.math.max
+
+class ObservationPrintAdapter(
+    private val context: Context,
+    private val items: List<Observation>,
+    private val jobName: String,
+    private val singleMode: Boolean,
+    private val typeface: Typeface
+) : PrintDocumentAdapter() {
+
+    private val forest = Color.rgb(31, 99, 72)
+    private val forestDark = Color.rgb(17, 63, 48)
+    private val teal = Color.rgb(46, 128, 111)
+    private val gold = Color.rgb(196, 139, 72)
+    private val sand = Color.rgb(247, 243, 234)
+    private val card = Color.rgb(255, 253, 248)
+    private val ink = Color.rgb(28, 52, 43)
+    private val muted = Color.rgb(103, 119, 111)
+    private val line = Color.rgb(226, 221, 210)
+
+    private var attributes: PrintAttributes? = null
+
+    // رصدان فقط في الصفحة الجماعية لإبقاء التقرير مريحًا وواضحًا.
+    private val pageCount: Int
+        get() = if (singleMode) max(1, items.size) else max(1, (items.size + 1) / 2)
+
+    override fun onLayout(
+        oldAttributes: PrintAttributes?,
+        newAttributes: PrintAttributes,
+        cancellationSignal: CancellationSignal,
+        callback: LayoutResultCallback,
+        extras: Bundle?
+    ) {
+        attributes = newAttributes
+        if (cancellationSignal.isCanceled) {
+            callback.onLayoutCancelled()
+            return
+        }
+        val info = PrintDocumentInfo.Builder(jobName)
+            .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+            .setPageCount(pageCount)
+            .build()
+        callback.onLayoutFinished(info, oldAttributes != newAttributes)
+    }
+
+    override fun onWrite(
+        pages: Array<out PageRange>,
+        destination: ParcelFileDescriptor,
+        cancellationSignal: CancellationSignal,
+        callback: WriteResultCallback
+    ) {
+        val attrs = attributes ?: PrintAttributes.Builder().build()
+        val document = PrintedPdfDocument(context, attrs)
+        try {
+            for (pageIndex in 0 until pageCount) {
+                if (cancellationSignal.isCanceled) {
+                    callback.onWriteCancelled()
+                    return
+                }
+                if (!containsPage(pages, pageIndex)) continue
+                val page = document.startPage(pageIndex)
+                if (singleMode) drawSingle(page.canvas, pageIndex) else drawCollection(page.canvas, pageIndex)
+                document.finishPage(page)
+            }
+            FileOutputStream(destination.fileDescriptor).use { document.writeTo(it) }
+            callback.onWriteFinished(pages)
+        } catch (e: Exception) {
+            callback.onWriteFailed(e.localizedMessage ?: "تعذر إنشاء ملف الطباعة")
+        } finally {
+            document.close()
+        }
+    }
+
+    private fun containsPage(ranges: Array<out PageRange>, page: Int): Boolean =
+        ranges.any { it == PageRange.ALL_PAGES || page in it.start..it.end }
+
+    private fun drawHeader(canvas: Canvas, subtitle: String) {
+        val w = canvas.width.toFloat()
+        val h = canvas.height.toFloat()
+        val top = h * .028f
+        val bar = RectF(w * .055f, top, w * .945f, h * .083f)
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = forestDark }
+        canvas.drawRoundRect(bar, h * .012f, h * .012f, fill)
+
+        // علامة بصرية صغيرة: دائرة استكشاف بنقطة نحاسية.
+        val markX = w * .90f
+        val markY = bar.centerY()
+        val markR = h * .016f
+        val markPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(38, 255, 255, 255)
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(markX, markY, markR * 1.55f, markPaint)
+        markPaint.style = Paint.Style.STROKE
+        markPaint.strokeWidth = h * .0022f
+        markPaint.color = Color.WHITE
+        canvas.drawCircle(markX, markY, markR, markPaint)
+        markPaint.style = Paint.Style.FILL
+        markPaint.color = gold
+        canvas.drawCircle(markX, markY, markR * .28f, markPaint)
+
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = h * .0195f
+            textAlign = Paint.Align.RIGHT
+            typeface = Typeface.create(this@ObservationPrintAdapter.typeface, Typeface.BOLD)
+        }
+        canvas.drawText("راصد البرية", w * .855f, markY - h * .001f, titlePaint)
+
+        val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(218, 232, 224)
+            textSize = h * .0105f
+            textAlign = Paint.Align.LEFT
+            typeface = this@ObservationPrintAdapter.typeface
+        }
+        val generated = SimpleDateFormat("dd MMMM yyyy", Locale("ar")).format(Date())
+        canvas.drawText("$subtitle  •  $generated", w * .085f, markY + h * .004f, subPaint)
+    }
+
+    private fun drawCollection(canvas: Canvas, pageIndex: Int) {
+        canvas.drawColor(Color.WHITE)
+        drawHeader(canvas, "تقرير السجل الميداني")
+        val w = canvas.width.toFloat()
+        val h = canvas.height.toFloat()
+        val margin = w * .055f
+        val top = h * .105f
+        val bottom = h * .052f
+        val gap = h * .024f
+        val cardH = (h - top - bottom - gap) / 2f
+
+        for (slot in 0 until 2) {
+            val index = pageIndex * 2 + slot
+            if (index >= items.size) break
+            val y = top + slot * (cardH + gap)
+            drawCollectionCard(canvas, items[index], RectF(margin, y, w - margin, y + cardH))
+        }
+        drawFooter(canvas, pageIndex + 1)
+    }
+
+    private fun drawCollectionCard(canvas: Canvas, item: Observation, rect: RectF) {
+        val radius = rect.width() * .026f
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = card; style = Paint.Style.FILL }
+        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = line
+            style = Paint.Style.STROKE
+            strokeWidth = rect.width() * .0025f
+        }
+        canvas.drawRoundRect(rect, radius, radius, fill)
+        canvas.drawRoundRect(rect, radius, radius, border)
+
+        // خط نحاسي رفيع يربط التقرير بالهوية دون تزاحم.
+        val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = categoryColor(item.category) }
+        canvas.drawRoundRect(
+            RectF(rect.right - rect.width() * .010f, rect.top + radius, rect.right, rect.bottom - radius),
+            radius / 2f, radius / 2f, accent
+        )
+
+        val pad = rect.width() * .026f
+        val imageW = rect.width() * .315f
+        val imageRect = RectF(
+            rect.right - pad - imageW,
+            rect.top + pad,
+            rect.right - pad,
+            rect.bottom - pad
+        )
+        drawImage(canvas, item.imageUri, imageRect)
+
+        val textRight = imageRect.left - rect.width() * .026f
+        val textLeft = rect.left + pad
+        val textWidth = textRight - textLeft
+        var y = rect.top + pad * 1.05f
+
+        y = drawWrappedRight(
+            canvas,
+            item.title.ifBlank { "بدون عنوان" },
+            textLeft,
+            y,
+            textWidth,
+            rect.width() * .032f,
+            ink,
+            2,
+            true
+        )
+
+        val metaLine = "${item.category}   •   ${item.rarity}   •   رصد #${item.id}"
+        y = drawWrappedRight(canvas, metaLine, textLeft, y + rect.height() * .018f, textWidth, rect.width() * .0175f, categoryColor(item.category), 1, true)
+
+        val location = when {
+            item.placeName.isNotBlank() -> item.placeName
+            item.latitude != null && item.longitude != null -> String.format(Locale.US, "%.5f, %.5f", item.latitude, item.longitude)
+            else -> "بدون موقع مسجل"
+        }
+        val locationLine = "الموقع: $location"
+        y = drawWrappedRight(canvas, locationLine, textLeft, y + rect.height() * .025f, textWidth, rect.width() * .017f, muted, 2, false)
+
+        val facts = buildString {
+            append("التاريخ: ${date(item.createdAt)}")
+            item.altitude?.let { append("   •   الارتفاع: ${String.format(Locale.US, "%,.0f", it)} م") }
+            if (item.tripName.isNotBlank()) append("\nالرحلة: ${item.tripName}")
+        }
+        y = drawWrappedRight(canvas, facts, textLeft, y + rect.height() * .015f, textWidth, rect.width() * .0165f, muted, 2, false)
+
+        if (item.description.isNotBlank()) {
+            drawWrappedRight(
+                canvas,
+                item.description,
+                textLeft,
+                y + rect.height() * .020f,
+                textWidth,
+                rect.width() * .017f,
+                Color.rgb(55, 70, 64),
+                3,
+                false
+            )
+        }
+
+        if (item.latitude != null && item.longitude != null) {
+            val qr = rect.width() * .085f
+            val qrRect = RectF(rect.left + pad, rect.bottom - pad - qr, rect.left + pad + qr, rect.bottom - pad)
+            drawQr(canvas, item, qrRect)
+        }
+    }
+
+    private fun drawSingle(canvas: Canvas, pageIndex: Int) {
+        canvas.drawColor(Color.WHITE)
+        val item = items.getOrNull(pageIndex) ?: return
+        drawHeader(canvas, "بطاقة رصد ميداني")
+
+        val w = canvas.width.toFloat()
+        val h = canvas.height.toFloat()
+        val margin = w * .065f
+        val contentW = w - margin * 2
+
+        val imageRect = RectF(margin, h * .105f, w - margin, h * .405f)
+        drawImage(canvas, item.imageUri, imageRect)
+
+        var y = h * .438f
+        y = drawWrappedRight(canvas, item.title.ifBlank { "بدون عنوان" }, margin, y, contentW, w * .043f, ink, 2, true)
+
+        val chipText = "${item.category}   •   ${item.rarity}   •   #${item.id}"
+        y = drawWrappedRight(canvas, chipText, margin, y + h * .008f, contentW, w * .023f, categoryColor(item.category), 1, true)
+
+        val tileGap = w * .018f
+        val tileW = (contentW - tileGap) / 2f
+        val tileH = h * .072f
+        val tileTop = y + h * .018f
+
+        drawInfoTile(canvas, "التاريخ", date(item.createdAt), RectF(w - margin - tileW, tileTop, w - margin, tileTop + tileH))
+        drawInfoTile(canvas, "الرحلة", item.tripName.ifBlank { "غير محددة" }, RectF(margin, tileTop, margin + tileW, tileTop + tileH))
+
+        val altitudeValue = item.altitude?.let {
+            val ref = if (item.altitudeReference == "MSL") "عن سطح البحر" else "مسجل"
+            "${String.format(Locale.US, "%,.0f", it)} م — $ref"
+        } ?: "غير متوفر"
+        val tileTop2 = tileTop + tileH + h * .011f
+        drawInfoTile(canvas, "الارتفاع", altitudeValue, RectF(w - margin - tileW, tileTop2, w - margin, tileTop2 + tileH))
+        drawInfoTile(canvas, "دقة الموقع", item.accuracy?.let { "±${it.toInt()} م" } ?: "غير متوفرة", RectF(margin, tileTop2, margin + tileW, tileTop2 + tileH))
+
+        val location = when {
+            item.latitude != null && item.longitude != null ->
+                "${item.placeName.ifBlank { "موقع مسجل" }} — ${String.format(Locale.US, "%.6f, %.6f", item.latitude, item.longitude)}"
