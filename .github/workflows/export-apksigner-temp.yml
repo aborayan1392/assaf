@@ -1,0 +1,33 @@
+name: Export Android apksigner Temporary
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'temp-rased-build-20260822'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: temp-rased-build-20260822
+      - name: Locate Android apksigner
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -type f -path '*/lib/apksigner.jar' | sort -V | tail -n 1)"
+          test -n "$JAR"
+          test -s "$JAR"
+          cp "$JAR" /tmp/apksigner.jar
+          sha256sum /tmp/apksigner.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apksigner-jar-temp
+          path: /tmp/apksigner.jar
+          if-no-files-found: error
+          retention-days: 1
