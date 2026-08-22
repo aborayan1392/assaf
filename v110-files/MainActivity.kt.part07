@@ -1,0 +1,93 @@
+        setImageResource(res); setColorFilter(color); scaleType = ImageView.ScaleType.CENTER_INSIDE; setPadding(dp(3), dp(3), dp(3), dp(3)); minimumWidth = dp(size); minimumHeight = dp(size)
+    }
+
+    private fun text(s: String, sp: Float, color: Int, bold: Boolean): TextView = TextView(this).apply {
+        text = s; textSize = sp; setTextColor(color); typeface = if (bold) Typeface.create(appTypeface, Typeface.BOLD) else appTypeface; includeFontPadding = false
+    }
+
+    private fun rounded(fill: Int, radiusDp: Float, strokeColor: Int? = null, strokeWidth: Int = 1): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE; setColor(fill); cornerRadius = dp(radiusDp).toFloat(); if (strokeColor != null) setStroke(dp(strokeWidth), strokeColor)
+    }
+
+    private fun circle(fill: Int): GradientDrawable = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(fill) }
+
+    private fun loadImage(view: ImageView, uriString: String, targetPx: Int = 640) {
+        view.tag = uriString
+        if (uriString.isBlank()) {
+            showImagePlaceholder(view)
+            return
+        }
+
+        val bucket = when {
+            targetPx <= 200 -> 200
+            targetPx <= 360 -> 360
+            targetPx <= 720 -> 720
+            else -> 1080
+        }
+        val cacheKey = "$uriString@$bucket"
+        imageCache.get(cacheKey)?.let { bitmap ->
+            if (view.tag == uriString) {
+                view.clearColorFilter()
+                view.scaleType = ImageView.ScaleType.CENTER_CROP
+                view.setImageBitmap(bitmap)
+            }
+            return
+        }
+
+        showImagePlaceholder(view)
+        imageExecutor.execute {
+            val bitmap = decodeSampledBitmap(uriString, bucket)
+            if (bitmap != null) imageCache.put(cacheKey, bitmap)
+            view.post {
+                if (view.tag != uriString) return@post
+                if (bitmap != null) {
+                    view.clearColorFilter()
+                    view.scaleType = ImageView.ScaleType.CENTER_CROP
+                    view.setImageBitmap(bitmap)
+                } else {
+                    showImagePlaceholder(view)
+                }
+            }
+        }
+    }
+
+    private fun showImagePlaceholder(view: ImageView) {
+        view.setImageResource(R.drawable.ic_photo)
+        view.setColorFilter(Color.rgb(162, 174, 168))
+        view.scaleType = ImageView.ScaleType.CENTER_INSIDE
+    }
+
+    private fun openImageStream(uriString: String): InputStream? = try {
+        val uri = Uri.parse(uriString)
+        when (uri.scheme?.lowercase(Locale.US)) {
+            "file" -> uri.path?.let { FileInputStream(it) }
+            "content" -> contentResolver.openInputStream(uri)
+            null, "" -> FileInputStream(uriString)
+            else -> contentResolver.openInputStream(uri)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun decodeSampledBitmap(uriString: String, targetPx: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        openImageStream(uriString)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        var sample = 1
+        val maxDimension = maxOf(bounds.outWidth, bounds.outHeight)
+        while (maxDimension / (sample * 2) >= targetPx) sample *= 2
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sample.coerceAtLeast(1)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return openImageStream(uriString)?.use { BitmapFactory.decodeStream(it, null, options) }
+    }
+
+    private fun date(ms: Long): String = SimpleDateFormat("dd MMMM yyyy", Locale("ar")).format(Date(ms))
+    private fun dateTime(ms: Long): String = SimpleDateFormat("dd MMMM yyyy - hh:mm a", Locale("ar")).format(Date(ms))
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density + .5f).toInt()
+    private fun dp(v: Float): Int = (v * resources.displayMetrics.density + .5f).toInt()
+    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+}
