@@ -1,0 +1,265 @@
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        setContentView(root)
+        refreshList()
+    }
+
+
+    private fun homeHeader(): View {
+        val frame = FrameLayout(this).apply {
+            minimumHeight = dp(124)
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(GREEN, GREEN_DARK)
+            ).apply {
+                cornerRadii = floatArrayOf(
+                    0f, 0f, 0f, 0f,
+                    dp(26f).toFloat(), dp(26f).toFloat(),
+                    dp(26f).toFloat(), dp(26f).toFloat()
+                )
+            }
+        }
+
+        val mark = FrameLayout(this).apply {
+            background = circle(Color.argb(38, 255, 255, 255))
+        }
+        mark.addView(iconView(R.drawable.ic_explore, Color.WHITE, 40), FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER))
+        frame.addView(mark, FrameLayout.LayoutParams(dp(62), dp(62), Gravity.RIGHT or Gravity.CENTER_VERTICAL).apply {
+            rightMargin = dp(16)
+        })
+
+        val titles = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+        }
+        titles.addView(text("راصد البرية", 27f, Color.WHITE, true).apply { gravity = Gravity.RIGHT })
+        titles.addView(text("سجل ميداني بصري لاكتشافاتك ورحلاتك", 14.2f, Color.rgb(230, 239, 234), false).apply {
+            gravity = Gravity.RIGHT
+            setPadding(0, dp(3), 0, 0)
+        })
+        titles.addView(text("رصد • موقع • توثيق", 11.5f, Color.rgb(207, 224, 214), true).apply {
+            gravity = Gravity.RIGHT
+            setPadding(0, dp(7), 0, 0)
+        })
+        frame.addView(titles, FrameLayout.LayoutParams(-1, -1).apply {
+            rightMargin = dp(88)
+            leftMargin = dp(68)
+        })
+
+        val settings = iconButton(R.drawable.ic_settings, Color.WHITE, 40).apply {
+            contentDescription = "الإعدادات"
+            background = circle(Color.argb(32, 255, 255, 255))
+            setOnClickListener { showSettings() }
+        }
+        frame.addView(settings, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.LEFT or Gravity.TOP).apply {
+            leftMargin = dp(14)
+            topMargin = dp(14)
+        })
+        return frame
+    }
+
+
+    private fun buildToolsBody(): LinearLayout {
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(3), 0, dp(8))
+        }
+
+        val (totalCount, locatedCount, favoriteCount) = db.dashboardCounts()
+        val stats = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            weightSum = 3f
+        }
+        stats.addView(statCard(totalCount.toString(), "كل الأرصاد", R.drawable.ic_explore, GREEN), LinearLayout.LayoutParams(0, dp(66), 1f).apply { marginEnd = dp(4) })
+        stats.addView(statCard(locatedCount.toString(), "بموقع", R.drawable.ic_location, TEAL), LinearLayout.LayoutParams(0, dp(66), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+        stats.addView(statCard(favoriteCount.toString(), "مميزة", R.drawable.ic_star, GOLD), LinearLayout.LayoutParams(0, dp(66), 1f).apply { marginStart = dp(4) })
+        body.addView(stats)
+
+        val filters = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, 0)
+        }
+        val categorySpinner = spinner(CATEGORIES).apply {
+            setSelection(CATEGORIES.indexOf(selectedCategory).coerceAtLeast(0))
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    selectedCategory = CATEGORIES[position]
+                    refreshList()
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
+        }
+        filters.addView(categorySpinner, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(5) })
+
+        val fav = CheckBox(this).apply {
+            text = "المميزة فقط"
+            textSize = 14f
+            setTextColor(INK)
+            typeface = appTypeface
+            isChecked = favoritesOnly
+            gravity = Gravity.CENTER
+            buttonTintList = android.content.res.ColorStateList.valueOf(GOLD)
+            background = rounded(Color.rgb(250, 248, 243), 14f, strokeColor = LINE)
+            setOnCheckedChangeListener { _, checked ->
+                favoritesOnly = checked
+                refreshList()
+            }
+        }
+        filters.addView(fav, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginStart = dp(5) })
+        body.addView(filters)
+
+        if (cachedTripNames.isNotEmpty()) {
+            val tripFilter = actionButton("الرحلة: $selectedTrip", R.drawable.ic_explore, Color.rgb(246, 249, 246), GREEN).apply {
+                background = rounded(Color.rgb(246, 249, 246), 14f, strokeColor = Color.rgb(208, 222, 213))
+                textSize = 14f
+                setOnClickListener { showTripFilterDialog() }
+            }
+            body.addView(tripFilter, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(7) })
+        }
+        return body
+    }
+
+    private fun buildPrimaryActions(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val add = actionButton("إضافة رصد", R.drawable.ic_add, GREEN, Color.WHITE).apply {
+            setOnClickListener { showForm(null) }
+            elevation = dp(2).toFloat()
+        }
+        val quick = actionButton("رصد سريع", R.drawable.ic_camera, Color.rgb(231, 240, 235), GREEN_DARK).apply {
+            background = rounded(Color.rgb(231, 240, 235), 17f, strokeColor = Color.rgb(201, 220, 209))
+            setOnClickListener { startQuickCapture() }
+        }
+        row.addView(add, LinearLayout.LayoutParams(0, -1, 1.15f).apply { marginEnd = dp(5) })
+        row.addView(quick, LinearLayout.LayoutParams(0, -1, .85f).apply { marginStart = dp(5) })
+        return row
+    }
+
+    private fun buildSearchField(): EditText {
+        val search = EditText(this).apply {
+            hint = "ابحث في الأرصاد والمواقع والوسوم"
+            setHintTextColor(Color.rgb(139, 149, 144))
+            setTextColor(INK)
+            textSize = 15f
+            typeface = appTypeface
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+            background = rounded(CARD, 17f, strokeColor = LINE)
+            setPadding(dp(15), 0, dp(15), 0)
+            setText(searchQuery)
+            val d = getDrawable(R.drawable.ic_search)?.mutate()
+            d?.setTint(TEAL)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(d, null, null, null)
+            compoundDrawablePadding = dp(8)
+        }
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                searchQuery = s?.toString().orEmpty()
+                searchRefreshRunnable?.let { uiHandler.removeCallbacks(it) }
+                searchRefreshRunnable = Runnable {
+                    if (currentScreen == "home") refreshList()
+                }
+                uiHandler.postDelayed(searchRefreshRunnable!!, 220L)
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        return search
+    }
+
+
+    private fun statCard(number: String, label: String, icon: Int, color: Int): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = rounded(Color.rgb(249, 249, 245), 14f, strokeColor = Color.rgb(236, 232, 224))
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        row.addView(iconView(icon, color, 22), LinearLayout.LayoutParams(dp(27), dp(27)))
+        row.addView(text(number, 18f, color, true).apply { setPadding(dp(4), 0, dp(4), 0) })
+        box.addView(row)
+        box.addView(text(label, 11.7f, MUTED, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, 0)
+        })
+        return box
+    }
+
+    private fun refreshList() {
+        val container = listContainer ?: return
+        val items = db.list(searchQuery, selectedCategory, favoritesOnly, selectedTrip)
+        val generation = ++listRenderGeneration
+        countLabel?.text = "${items.size} رصد"
+        container.removeAllViews()
+        if (items.isEmpty()) {
+            val empty = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(20), dp(70), dp(20), dp(60)) }
+            empty.addView(iconView(R.drawable.ic_explore, Color.rgb(160, 171, 165), 64), LinearLayout.LayoutParams(dp(72), dp(72)))
+            empty.addView(text("لا توجد أرصاد مطابقة", 18f, MUTED, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(14), 0, 0) })
+            container.addView(empty, LinearLayout.LayoutParams(-1, -2))
+            return
+        }
+
+        // Build long lists in small UI batches so taps/navigation stay responsive.
+        fun renderChunk(startIndex: Int) {
+            if (generation != listRenderGeneration || currentScreen != "home" || listContainer !== container) return
+            val endIndex = minOf(startIndex + 12, items.size)
+            for (i in startIndex until endIndex) {
+                container.addView(observationCard(items[i]), LinearLayout.LayoutParams(-1, dp(148)).apply { setMargins(0, 0, 0, dp(10)) })
+            }
+            if (endIndex < items.size) {
+                uiHandler.post { renderChunk(endIndex) }
+            }
+        }
+        renderChunk(0)
+    }
+
+
+    private fun observationCard(item: Observation): View {
+        val accent = categoryColor(item.category)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(CARD, 20f, strokeColor = LINE)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            isClickable = true
+            isFocusable = true
+            elevation = dp(1).toFloat()
+            setOnClickListener { showDetail(item.id) }
+        }
+
+        val imageFrame = FrameLayout(this).apply {
+            background = rounded(Color.rgb(239, 241, 236), 15f)
+            clipToOutline = true
+        }
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded(Color.rgb(239, 241, 236), 15f)
+            clipToOutline = true
+            loadImage(this, item.imageUri, 360)
+        }
+        imageFrame.addView(image, FrameLayout.LayoutParams(-1, -1))
+        if (item.favorite) {
+            val star = iconView(R.drawable.ic_star, GOLD, 21).apply {
+                background = circle(Color.argb(235, 255, 255, 255))
+                setPadding(dp(5), dp(5), dp(5), dp(5))
+            }
+            imageFrame.addView(star, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.LEFT or Gravity.TOP).apply {
+                leftMargin = dp(6)
+                topMargin = dp(6)
+            })
+        }
+        card.addView(imageFrame, LinearLayout.LayoutParams(dp(112), -1).apply { marginEnd = dp(11) })
+
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(2), 0, dp(2))
+        }
+        texts.addView(text(item.title.ifBlank { "بدون عنوان" }, 18.3f, INK, true).apply {
