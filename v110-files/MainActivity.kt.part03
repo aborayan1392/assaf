@@ -1,0 +1,172 @@
+        body.addView(imageScroll, LinearLayout.LayoutParams(-1, dp(76)))
+        body.addView(text("يمكن إضافة عدة صور — اضغط الصورة لجعلها الرئيسية، واضغط مطولًا لحذفها", 11.5f, MUTED, false).apply { gravity = Gravity.RIGHT }, LinearLayout.LayoutParams(-1, -2))
+        refreshFormImages()
+        val imageButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, dp(10)) }
+        imageButtons.addView(actionButton("الكاميرا", R.drawable.ic_camera, GREEN, Color.WHITE).apply { setOnClickListener { startCamera() } }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginEnd = dp(6) })
+        imageButtons.addView(actionButton("المعرض", R.drawable.ic_photo, TEAL, Color.WHITE).apply { setOnClickListener { startGallery() } }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginStart = dp(6) })
+        body.addView(imageButtons)
+
+        val title = input(body, "الاسم", "اسم الشيء أو الرصد", false, existing?.title.orEmpty())
+        label(body, "التصنيف")
+        val category = spinner(FORM_CATEGORIES); category.setSelection(FORM_CATEGORIES.indexOf(existing?.category ?: "أخرى").coerceAtLeast(0)); body.addView(category, fieldLp())
+        label(body, "درجة التميز")
+        val rarity = spinner(RARITIES); rarity.setSelection(RARITIES.indexOf(existing?.rarity ?: "ملفت").coerceAtLeast(0)); body.addView(rarity, fieldLp())
+        val description = input(body, "الوصف", "صف ما شاهدته بالتفصيل", true, existing?.description.orEmpty())
+        val notes = input(body, "ملاحظات ميدانية", "أي ملاحظات إضافية", true, existing?.notes.orEmpty())
+        val lastTrip = getSharedPreferences("rased_prefs", MODE_PRIVATE).getString("last_trip", "").orEmpty()
+        val trip = input(body, "الرحلة (اختياري)", "مثال: رحلة بلجرشي — أغسطس 2026", false, existing?.tripName ?: lastTrip)
+        val place = input(body, "اسم المكان", "مثال: وادي، جبل، طريق...", false, existing?.placeName.orEmpty())
+
+        label(body, "الإحداثيات")
+        val locBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = rounded(Color.WHITE, 16f, strokeColor = Color.rgb(222, 224, 219)); setPadding(dp(14), dp(10), dp(14), dp(10)) }
+        locationStatusView = text(locationText(), 14f, MUTED, true).apply { gravity = Gravity.RIGHT }
+        locBox.addView(locationStatusView)
+        val locButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        locButtons.addView(actionButton("GPS دقيق", R.drawable.ic_location, TEAL, Color.WHITE).apply { setOnClickListener { requestLocation() } }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(5) })
+        locButtons.addView(actionButton("تحديد يدوي", R.drawable.ic_explore, GREEN, Color.WHITE).apply { setOnClickListener { showManualLocationPicker() } }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(5) })
+        locBox.addView(locButtons, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(8) })
+        body.addView(locBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+        val tags = input(body, "الوسوم", "مثال: صخرة، نادر، وادي", false, existing?.tags.orEmpty())
+        val favorite = CheckBox(this).apply { text = "إضافة إلى المميزة"; textSize = 16f; setTextColor(INK); typeface = appTypeface; isChecked = existing?.favorite == true; buttonTintList = android.content.res.ColorStateList.valueOf(GOLD); setPadding(0, dp(8), 0, dp(8)) }
+        body.addView(favorite)
+
+        val save = actionButton("حفظ الرصد", R.drawable.ic_save, GREEN, Color.WHITE)
+        save.setOnClickListener {
+            if (title.text.toString().trim().isEmpty()) { toast("اكتب اسم الرصد أولًا"); title.requestFocus(); return@setOnClickListener }
+            val o = Observation(
+                id = editingId,
+                title = title.text.toString().trim(),
+                category = category.selectedItem.toString(),
+                rarity = rarity.selectedItem.toString(),
+                description = description.text.toString().trim(),
+                notes = notes.text.toString().trim(),
+                imageUri = formImageUris.firstOrNull().orEmpty(),
+                imageUris = formImageUris.toList(),
+                latitude = formLat,
+                longitude = formLon,
+                altitude = formAltitude,
+                accuracy = formAccuracy,
+                altitudeAccuracy = formAltitudeAccuracy,
+                altitudeReference = formAltitudeReference,
+                locationCapturedAt = formLocationCapturedAt,
+                locationProvider = formLocationProvider,
+                placeName = place.text.toString().trim(),
+                tripName = trip.text.toString().trim(),
+                tags = tags.text.toString().trim(),
+                createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+                favorite = favorite.isChecked,
+                quickDraft = false
+            )
+            val id = db.save(o)
+            if (o.tripName.isNotBlank()) getSharedPreferences("rased_prefs", MODE_PRIVATE).edit().putString("last_trip", o.tripName).apply()
+            toast("تم حفظ الرصد")
+            showDetail(id)
+        }
+        body.addView(save, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(14) })
+        setContentView(root)
+    }
+
+    private fun showSettings() {
+        val dialog = Dialog(this)
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(20), dp(20), dp(18)); background = rounded(Color.WHITE, 24f)
+        }
+        wrap.addView(text("الإعدادات", 24f, INK, true).apply { gravity = Gravity.RIGHT })
+        wrap.addView(text("إدارة النسخ الاحتياطية والطباعة والبيانات", 14f, MUTED, false).apply { gravity = Gravity.RIGHT; setPadding(0, dp(5), 0, dp(14)) })
+
+        wrap.addView(settingsRow(R.drawable.ic_backup, "تصدير نسخة احتياطية كاملة ZIP", "يحفظ جميع البيانات والصور المتعددة والرحلات في ملف واحد", TEAL) {
+            dialog.dismiss(); startExport()
+        })
+        wrap.addView(settingsRow(R.drawable.ic_restore, "استيراد نسخة احتياطية", "يعيد البيانات والصور والرحلات من النسخة الكاملة", GREEN) {
+            dialog.dismiss(); confirmImport()
+        })
+        wrap.addView(settingsRow(R.drawable.ic_print, "طباعة جماعية", "تقرير بصري مريح — رصدان فقط في الصفحة", GOLD) {
+            dialog.dismiss(); val items = db.all(); if (items.isEmpty()) toast("لا توجد بيانات للطباعة") else printItems(items, false)
+        })
+        if (db.tripNames().isNotEmpty()) {
+            wrap.addView(settingsRow(R.drawable.ic_explore, "طباعة رحلة", "اختر رحلة لطباعة أرصادها كتقرير واحد", GREEN) {
+                dialog.dismiss(); showTripPrintDialog()
+            })
+        }
+        wrap.addView(settingsRow(R.drawable.ic_delete, "مسح كل البيانات", "حذف جميع الأرصاد نهائيًا", RED) {
+            dialog.dismiss(); confirmClearAll()
+        })
+
+        wrap.addView(text("الإصدار 1.1.0   |   برمجة : ابوريان الغامدي", 12f, Color.rgb(150, 158, 154), true).apply { gravity = Gravity.CENTER; setPadding(0, dp(16), 0, 0) })
+        dialog.setContentView(wrap)
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout((resources.displayMetrics.widthPixels * .90f).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.setOnShowListener { dialog.window?.setLayout((resources.displayMetrics.widthPixels * .90f).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT) }
+        dialog.show()
+    }
+
+    private fun settingsRow(icon: Int, title: String, subtitle: String, color: Int, action: () -> Unit): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(11), dp(12), dp(11)); background = rounded(Color.rgb(250, 250, 248), 16f, strokeColor = Color.rgb(231, 231, 226)); setOnClickListener { action() }
+        }
+        row.addView(iconView(icon, color, 36), LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginEnd = dp(10) })
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(text(title, 17f, if (color == RED) RED else INK, true).apply { gravity = Gravity.RIGHT })
+        texts.addView(text(subtitle, 12.5f, MUTED, false).apply { gravity = Gravity.RIGHT; setPadding(0, dp(2), 0, 0) })
+        row.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
+        return row.also { it.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) } }
+    }
+
+    private fun startExport() {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE); type = "application/zip"; putExtra(Intent.EXTRA_TITLE, "RasedAlBarr_FullBackup_$stamp.zip")
+        }
+        startActivityForResult(i, REQ_EXPORT)
+    }
+
+    private fun confirmImport() {
+        AlertDialog.Builder(this)
+            .setTitle("استيراد نسخة احتياطية")
+            .setMessage("سيتم استبدال الأرصاد الحالية بمحتويات النسخة الاحتياطية. يفضل تصدير نسخة من بياناتك الحالية أولًا.")
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("اختيار النسخة") { _, _ ->
+                val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }
+                startActivityForResult(i, REQ_IMPORT)
+            }.show()
+    }
+
+    private fun confirmClearAll() {
+        AlertDialog.Builder(this)
+            .setTitle("مسح كل البيانات؟")
+            .setMessage("سيتم حذف جميع الأرصاد المحفوظة داخل التطبيق نهائيًا. لا يمكن التراجع عن هذه العملية.")
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("مسح نهائي") { _, _ -> db.clearAll(); runCatching { java.io.File(filesDir, "imported_images").deleteRecursively() }; toast("تم مسح جميع البيانات"); showHome() }
+            .show()
+    }
+
+    private fun confirmDelete(item: Observation) {
+        AlertDialog.Builder(this).setTitle("حذف الرصد؟").setMessage("سيتم حذف «${item.title}» من السجل.")
+            .setNegativeButton("إلغاء", null).setPositiveButton("حذف") { _, _ -> db.delete(item.id); toast("تم الحذف"); showHome() }.show()
+    }
+
+    private fun printItems(items: List<Observation>, single: Boolean) {
+        val name = if (single) "راصد البرية - ${items.firstOrNull()?.title.orEmpty()}" else "راصد البرية - سجل الرصد"
+        val manager = getSystemService(PRINT_SERVICE) as PrintManager
+        manager.print(name, ObservationPrintAdapter(this, items, name, single, appTypeface), null)
+    }
+
+    private fun openMap(item: Observation) {
+        if (item.latitude == null || item.longitude == null) { toast("لا توجد إحداثيات لهذا الرصد"); return }
+        val uri = Uri.parse("geo:${item.latitude},${item.longitude}?q=${item.latitude},${item.longitude}(${Uri.encode(item.title)})")
+        try { startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: Exception) { toast("لم يتم العثور على تطبيق خرائط") }
+    }
+
+    private fun share(item: Observation) {
+        val loc = if (item.latitude != null && item.longitude != null) "${item.latitude}, ${item.longitude}" else item.placeName.ifBlank { "بدون موقع" }
+        val body = "${item.title}\nالتصنيف: ${item.category}\nالتميّز: ${item.rarity}\nالموقع: $loc\n${item.description}"
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, body) }, "مشاركة الرصد"))
+    }
+
+    private fun startCamera() {
+        quickCapturePending = false
+        val needed = mutableListOf<String>()
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) needed += Manifest.permission.CAMERA
