@@ -1,0 +1,215 @@
+        if (Build.VERSION.SDK_INT <= 28 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) needed += Manifest.permission.WRITE_EXTERNAL_STORAGE
+        if (needed.isNotEmpty()) { requestPermissions(needed.toTypedArray(), REQ_CAMERA); return }
+        launchCameraIntent()
+    }
+
+    private fun launchCameraIntent() {
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "Rased_${System.currentTimeMillis()}.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= 29) put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RasedAlBarr")
+        }
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        if (uri == null) { toast("تعذر إنشاء ملف الصورة"); return }
+        cameraUri = uri
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri); addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try { startActivityForResult(intent, REQ_CAMERA) } catch (_: Exception) { toast("تعذر فتح الكاميرا") }
+    }
+
+    private fun startGallery() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "image/*"; putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
+        startActivityForResult(intent, REQ_GALLERY)
+    }
+
+    private fun requestLocation() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQ_LOCATION); return
+        }
+        captureLocation()
+    }
+
+    private fun captureLocation() {
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+        try {
+            val fineGranted = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val coarseGranted = checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            if (!fineGranted && !coarseGranted) { toast("يجب السماح بالوصول إلى الموقع"); return }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !lm.isLocationEnabled) {
+                locationStatusView?.text = "خدمة الموقع متوقفة في الجهاز"
+                toast("فعّل خدمة الموقع من إعدادات الجهاز أولًا")
+                return
+            }
+
+            pendingLocationListener?.let { old -> runCatching { lm.removeUpdates(old) } }
+            pendingLocationListener = null
+
+            val now = System.currentTimeMillis()
+            val started = SystemClock.elapsedRealtime()
+            val lastLocations = lm.allProviders.distinct()
+                .mapNotNull { provider -> runCatching { lm.getLastKnownLocation(provider) }.getOrNull() }
+                .filter { it.latitude in -90.0..90.0 && it.longitude in -180.0..180.0 }
+                .sortedByDescending { it.time }
+
+            val networkEnabled = coarseGranted && runCatching { lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }.getOrDefault(false)
+            val gpsEnabled = fineGranted && runCatching { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)
+            if (!networkEnabled && !gpsEnabled) {
+                locationStatusView?.text = "لا يوجد مزود موقع متاح الآن"
+                toast(if (!fineGranted) "فعّل الموقع الدقيق للتطبيق" else "تأكد من تشغيل خدمة الموقع في الجهاز")
+                return
+            }
+
+            locationStatusView?.text = if (gpsEnabled) {
+                "جارٍ تحسين دقة GPS… ابقَ في مكان مكشوف لثوانٍ"
+            } else {
+                "جارٍ تحديد الموقع عبر الشبكة… فعّل الموقع الدقيق للحصول على أفضل دقة"
+            }
+
+            var bestCandidate: Location? = lastLocations.firstOrNull { loc ->
+                val age = now - loc.time
+                age in 0..(2 * 60 * 1000L) && loc.hasAccuracy() && loc.accuracy <= 100f
+            }
+            var samples = 0
+
+            fun horizontalAccuracy(loc: Location): Float = if (loc.hasAccuracy()) loc.accuracy else Float.MAX_VALUE
+            fun verticalAccuracy(loc: Location): Float? =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && loc.hasVerticalAccuracy()) loc.verticalAccuracyMeters else null
+
+            fun isBetter(candidate: Location, current: Location?): Boolean {
+                if (current == null) return true
+                val ch = horizontalAccuracy(candidate)
+                val oh = horizontalAccuracy(current)
+                if (ch + 1f < oh) return true
+                if (oh + 1f < ch) return false
+                val cv = verticalAccuracy(candidate) ?: Float.MAX_VALUE
+                val ov = verticalAccuracy(current) ?: Float.MAX_VALUE
+                if (candidate.hasAltitude() && !current.hasAltitude()) return true
+                if (cv + 2f < ov) return true
+                return candidate.time > current.time
+            }
+
+            fun liveStatus(loc: Location) {
+                val parts = mutableListOf<String>()
+                if (loc.hasAccuracy()) parts += "الموقع ±${loc.accuracy.toInt()} م"
+                verticalAccuracy(loc)?.let { parts += "الارتفاع ±${it.toInt()} م" }
+                locationStatusView?.text = if (parts.isEmpty()) "جارٍ تحسين الدقة…" else "جارٍ تحسين الدقة… ${parts.joinToString("  |  ")}"
+            }
+
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    if (pendingLocationListener !== this) return
+                    if (location.latitude !in -90.0..90.0 || location.longitude !in -180.0..180.0) return
+                    samples++
+                    if (isBetter(location, bestCandidate)) bestCandidate = Location(location)
+                    bestCandidate?.let(::liveStatus)
+
+                    val best = bestCandidate ?: return
+                    val h = horizontalAccuracy(best)
+                    val v = verticalAccuracy(best)
+                    val elapsed = SystemClock.elapsedRealtime() - started
+                    val preciseEnough = h <= 6f && best.hasAltitude() && v != null && v <= 12f && samples >= 2 && elapsed >= 2500L
+                    if (preciseEnough) finishPreciseLocation(lm, this, best)
+                }
+                @Deprecated("Deprecated in Android") override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+                override fun onProviderEnabled(provider: String) = Unit
+                override fun onProviderDisabled(provider: String) = Unit
+            }
+            pendingLocationListener = listener
+
+            if (networkEnabled) runCatching { lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 800L, 0f, listener, Looper.getMainLooper()) }
+            if (gpsEnabled) runCatching { lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500L, 0f, listener, Looper.getMainLooper()) }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (networkEnabled) runCatching { lm.getCurrentLocation(LocationManager.NETWORK_PROVIDER, null, mainExecutor) { it?.let(listener::onLocationChanged) } }
+                if (gpsEnabled) runCatching { lm.getCurrentLocation(LocationManager.GPS_PROVIDER, null, mainExecutor) { it?.let(listener::onLocationChanged) } }
+            }
+
+            uiHandler.postDelayed({
+                if (pendingLocationListener === listener) {
+                    val fallback = bestCandidate
+                    if (fallback != null) finishPreciseLocation(lm, listener, fallback)
+                    else {
+                        runCatching { lm.removeUpdates(listener) }
+                        pendingLocationListener = null
+                        locationStatusView?.text = locationText()
+                        toast("لم تصل قراءة موقع؛ جرّب في مكان مكشوف")
+                    }
+                }
+            }, 15000L)
+        } catch (_: SecurityException) {
+            locationStatusView?.text = locationText(); toast("صلاحية الموقع غير متاحة للتطبيق")
+        } catch (_: Exception) {
+            locationStatusView?.text = locationText(); toast("تعذر تشغيل تحديد الموقع، حاول مرة أخرى")
+        }
+    }
+
+    private fun hasMslAltitudeCompat(location: Location): Boolean =
+        if (Build.VERSION.SDK_INT >= 34) {
+            location.hasMslAltitude()
+        } else {
+            location.extras?.containsKey("androidx.core.location.extra.MSL_ALTITUDE") == true
+        }
+
+    private fun mslAltitudeCompat(location: Location): Double? =
+        if (Build.VERSION.SDK_INT >= 34) {
+            if (location.hasMslAltitude()) location.mslAltitudeMeters else null
+        } else {
+            location.extras?.takeIf { it.containsKey("androidx.core.location.extra.MSL_ALTITUDE") }
+                ?.getDouble("androidx.core.location.extra.MSL_ALTITUDE")
+        }
+
+    private fun mslAltitudeAccuracyCompat(location: Location): Float? =
+        if (Build.VERSION.SDK_INT >= 34) {
+            if (location.hasMslAltitudeAccuracy()) location.mslAltitudeAccuracyMeters else null
+        } else {
+            location.extras?.takeIf { it.containsKey("androidx.core.location.extra.MSL_ALTITUDE_ACCURACY") }
+                ?.getFloat("androidx.core.location.extra.MSL_ALTITUDE_ACCURACY")
+        }
+
+    private fun finishPreciseLocation(lm: LocationManager, listener: LocationListener, location: Location) {
+        if (pendingLocationListener !== listener) return
+        runCatching { lm.removeUpdates(listener) }
+        pendingLocationListener = null
+        val copy = Location(location)
+        if (!copy.hasAltitude()) {
+            applyPreciseLocation(copy, null, null, "")
+            return
+        }
+        locationStatusView?.text = "تم تثبيت الموقع — جارٍ تصحيح الارتفاع إلى مستوى سطح البحر…"
+        imageExecutor.execute {
+            var altitude: Double? = copy.altitude
+            var altitudeAccuracy: Float? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && copy.hasVerticalAccuracy()) copy.verticalAccuracyMeters else null
+            var reference = "WGS84"
+            runCatching {
+                AltitudeConverterCompat.addMslAltitudeToLocation(applicationContext, copy)
+                mslAltitudeCompat(copy)?.let { msl ->
+                    altitude = msl
+                    reference = "MSL"
+                    mslAltitudeAccuracyCompat(copy)?.let { acc -> altitudeAccuracy = acc }
+                }
+            }
+            uiHandler.post { applyPreciseLocation(copy, altitude, altitudeAccuracy, reference) }
+        }
+    }
+
+    private fun applyPreciseLocation(location: Location, altitude: Double?, altitudeAccuracy: Float?, altitudeReference: String) {
+        formLat = location.latitude
+        formLon = location.longitude
+        formAltitude = altitude
+        formAccuracy = if (location.hasAccuracy()) location.accuracy else null
+        formAltitudeAccuracy = altitudeAccuracy
+        formAltitudeReference = altitudeReference
+        formLocationCapturedAt = if (location.time > 0L) location.time else System.currentTimeMillis()
+        formLocationProvider = location.provider.orEmpty()
+        locationStatusView?.text = locationText()
+        val h = formAccuracy?.let { "الموقع ±${it.toInt()}م" } ?: "الموقع: دقة غير محددة"
+        val v = formAltitudeAccuracy?.let { "الارتفاع ±${it.toInt()}م" }
+        toast(listOfNotNull(h, v).joinToString(" | "))
+    }
+
+    private fun locationText(): String {
+        if (formLat == null || formLon == null) return "لم يتم تسجيل إحداثيات بعد"
+        val first = String.format(Locale.US, "%.6f, %.6f", formLat, formLon)
+        val parts = mutableListOf<String>()
