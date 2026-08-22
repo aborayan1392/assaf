@@ -147,8 +147,6 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 28) Typeface.create(base, 500, false) else Typeface.create(base, Typeface.NORMAL)
     } catch (_: Exception) {
         Typeface.create("sans-serif", Typeface.NORMAL)
-    } catch (_: Exception) {
-        Typeface.create("sans-serif", Typeface.BOLD)
     }
 
     private fun showStartupError(t: Throwable) {
