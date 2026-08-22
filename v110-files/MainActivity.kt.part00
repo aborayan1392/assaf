@@ -1,0 +1,294 @@
+package com.aboryan.rased.albarr
+
+import android.Manifest
+import android.app.Activity
+import android.app.AlertDialog
+import android.app.Dialog
+import android.content.ContentValues
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.provider.MediaStore
+import android.util.LruCache
+import android.print.PrintManager
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowInsets
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.CheckBox
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageButton
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Spinner
+import android.widget.TextView
+import android.widget.Toast
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.core.location.altitude.AltitudeConverterCompat
+import java.io.FileInputStream
+import java.io.InputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.Executors
+
+class MainActivity : Activity() {
+
+    companion object {
+        private const val REQ_CAMERA = 501
+        private const val REQ_GALLERY = 502
+        private const val REQ_LOCATION = 503
+        private const val REQ_EXPORT = 601
+        private const val REQ_IMPORT = 602
+
+        private val CATEGORIES = arrayOf("الكل", "أحجار وصخور", "أشجار", "نباتات", "آثار", "حشرات وحيوانات", "تكوينات طبيعية", "أخرى")
+        private val FORM_CATEGORIES = CATEGORIES.drop(1).toTypedArray()
+        private val RARITIES = arrayOf("ملفت", "غير مألوف", "نادر جدًا")
+
+        // هوية "راصد البرية": أخضر غابة + رملي دافئ + نحاسي مستوحى من البيئة البرية.
+        private val GREEN = Color.rgb(31, 99, 72)
+        private val GREEN_DARK = Color.rgb(17, 63, 48)
+        private val TEAL = Color.rgb(46, 128, 111)
+        private val GOLD = Color.rgb(196, 139, 72)
+        private val SAND = Color.rgb(247, 243, 234)
+        private val CARD = Color.rgb(255, 253, 248)
+        private val MIST = Color.rgb(237, 244, 239)
+        private val LINE = Color.rgb(226, 221, 210)
+        private val INK = Color.rgb(28, 52, 43)
+        private val MUTED = Color.rgb(103, 119, 111)
+        private val RED = Color.rgb(176, 68, 61)
+    }
+
+    private lateinit var db: ObservationDb
+    private lateinit var backupManager: BackupManager
+    private lateinit var appTypeface: Typeface
+    private var currentScreen = "home"
+
+    private var toolsExpanded = false
+    private var searchQuery = ""
+    private var selectedCategory = "الكل"
+    private var favoritesOnly = false
+    private var selectedTrip = "كل الرحلات"
+
+    private var listContainer: LinearLayout? = null
+    private var countLabel: TextView? = null
+
+    private var editingId = 0L
+    private var formImageUri = ""
+    private val formImageUris = mutableListOf<String>()
+    private var cameraUri: Uri? = null
+    private var formLat: Double? = null
+    private var formLon: Double? = null
+    private var formAltitude: Double? = null
+    private var formAccuracy: Float? = null
+    private var formAltitudeAccuracy: Float? = null
+    private var formAltitudeReference: String = ""
+    private var formLocationCapturedAt: Long? = null
+    private var formLocationProvider: String = ""
+    private var formImageView: ImageView? = null
+    private var formImageStrip: LinearLayout? = null
+    private var locationStatusView: TextView? = null
+    private var pendingLocationListener: LocationListener? = null
+    private var quickCapturePending = false
+
+    // Decode photos outside the UI thread to keep navigation responsive.
+    private val imageExecutor = Executors.newFixedThreadPool(2)
+    private val imageCache = object : LruCache<String, Bitmap>(16 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+    }
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private var searchRefreshRunnable: Runnable? = null
+    private var cachedTripNames: List<String> = emptyList()
+    private var listRenderGeneration = 0
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) window.setDecorFitsSystemWindows(false)
+            window.statusBarColor = GREEN_DARK
+            window.navigationBarColor = SAND
+            db = ObservationDb(this)
+            backupManager = BackupManager(this, db)
+            appTypeface = loadTypeface()
+            showHome()
+        } catch (t: Throwable) {
+            showStartupError(t)
+        }
+    }
+
+
+    private fun loadTypeface(): Typeface = try {
+        // ندعم Cairo إذا كان مضمنًا، وإلا نستخدم خط النظام العربي بدل السقوط إلى Bold ثقيل.
+        val base = Typeface.createFromAsset(assets, "fonts/Cairo.ttf")
+        if (Build.VERSION.SDK_INT >= 28) Typeface.create(base, 500, false) else Typeface.create(base, Typeface.NORMAL)
+    } catch (_: Exception) {
+        Typeface.create("sans-serif", Typeface.NORMAL)
+    } catch (_: Exception) {
+        Typeface.create("sans-serif", Typeface.BOLD)
+    }
+
+    private fun showStartupError(t: Throwable) {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(48), dp(24), dp(24))
+            setBackgroundColor(SAND)
+        }
+        root.addView(TextView(this).apply {
+            text = "تعذر تشغيل راصد البرية"
+            textSize = 23f; setTextColor(RED); typeface = Typeface.DEFAULT_BOLD
+        })
+        root.addView(TextView(this).apply {
+            text = "حدث خطأ أثناء تهيئة التطبيق. البيانات محفوظة ولم يتم حذفها.\n\n${t.javaClass.simpleName}: ${t.message ?: "خطأ غير معروف"}"
+            textSize = 15f; setTextColor(INK); setPadding(0, dp(18), 0, 0)
+        })
+        setContentView(root)
+    }
+
+    override fun onDestroy() {
+        searchRefreshRunnable?.let { uiHandler.removeCallbacks(it) }
+        pendingLocationListener?.let { listener ->
+            runCatching { (getSystemService(LOCATION_SERVICE) as LocationManager).removeUpdates(listener) }
+        }
+        imageExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
+    override fun onBackPressed() {
+        if (currentScreen == "home") super.onBackPressed() else showHome()
+    }
+
+    private fun rootLayout(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setBackgroundColor(SAND)
+        layoutDirection = View.LAYOUT_DIRECTION_RTL
+        setOnApplyWindowInsetsListener { v, insets ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                val ime = insets.getInsets(WindowInsets.Type.ime())
+                v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            } else {
+                @Suppress("DEPRECATION")
+                v.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            }
+            insets
+        }
+    }
+
+
+    private fun showHome() {
+        currentScreen = "home"
+        cachedTripNames = db.tripNames()
+        if (selectedTrip != "كل الرحلات" && selectedTrip !in cachedTripNames) selectedTrip = "كل الرحلات"
+
+        val root = rootLayout()
+        root.addView(homeHeader())
+
+        val actions = buildPrimaryActions()
+        root.addView(actions, LinearLayout.LayoutParams(-1, dp(54)).apply {
+            setMargins(dp(16), dp(10), dp(16), dp(8))
+        })
+
+        val search = buildSearchField()
+        root.addView(search, LinearLayout.LayoutParams(-1, dp(50)).apply {
+            setMargins(dp(16), 0, dp(16), dp(8))
+        })
+
+        val toolsCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(CARD, 18f, strokeColor = LINE)
+            setPadding(dp(12), dp(2), dp(12), dp(2))
+            elevation = dp(1).toFloat()
+        }
+        root.addView(toolsCard, LinearLayout.LayoutParams(-1, -2).apply {
+            setMargins(dp(16), 0, dp(16), dp(7))
+        })
+
+        val toolsHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(48)
+            isClickable = true
+            isFocusable = true
+        }
+        toolsHeader.addView(iconView(R.drawable.ic_tune, TEAL, 30), LinearLayout.LayoutParams(dp(36), dp(36)))
+        val toolsTitle = text(
+            if (toolsExpanded) "إخفاء أدوات التصفية" else "تصفية وتنظيم السجل",
+            15.5f, INK, true
+        ).apply { gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL }
+        toolsHeader.addView(toolsTitle, LinearLayout.LayoutParams(0, -1, 1f))
+
+        val activeFilters = buildString {
+            if (selectedCategory != "الكل") append(selectedCategory)
+            if (favoritesOnly) {
+                if (isNotEmpty()) append(" • ")
+                append("المميزة")
+            }
+            if (selectedTrip != "كل الرحلات") {
+                if (isNotEmpty()) append(" • ")
+                append(selectedTrip)
+            }
+        }
+        if (activeFilters.isNotBlank()) {
+            toolsHeader.addView(metaChip(activeFilters, Color.rgb(244, 239, 228), GOLD, 12f), LinearLayout.LayoutParams(-2, dp(30)).apply {
+                marginEnd = dp(6)
+            })
+        }
+        val chevron = iconView(if (toolsExpanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down, GREEN, 25)
+        toolsHeader.addView(chevron, LinearLayout.LayoutParams(dp(34), dp(34)))
+        toolsCard.addView(toolsHeader)
+
+        val body = buildToolsBody().apply { visibility = if (toolsExpanded) View.VISIBLE else View.GONE }
+        toolsCard.addView(body)
+        toolsHeader.setOnClickListener {
+            toolsExpanded = !toolsExpanded
+            body.visibility = if (toolsExpanded) View.VISIBLE else View.GONE
+            chevron.setImageResource(if (toolsExpanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+            chevron.setColorFilter(GREEN)
+            toolsTitle.text = if (toolsExpanded) "إخفاء أدوات التصفية" else "تصفية وتنظيم السجل"
+        }
+
+        val listHead = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(18), dp(5), dp(18), dp(5))
+        }
+        listHead.addView(text("الأرصاد الأخيرة", 20f, INK, true), LinearLayout.LayoutParams(0, -2, 1f))
+        countLabel = metaChip("", MIST, GREEN, 12.5f).apply { gravity = Gravity.CENTER }
+        listHead.addView(countLabel, LinearLayout.LayoutParams(-2, dp(31)))
+        root.addView(listHead)
+
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            setPadding(0, 0, 0, dp(18))
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        }
+        listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), dp(20))
+        }
+        scroll.addView(listContainer, FrameLayout.LayoutParams(-1, -2))
