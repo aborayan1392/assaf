@@ -1,0 +1,228 @@
+                val lat = latEdit.text.toString().trim().toDoubleOrNull()
+                val lon = lonEdit.text.toString().trim().toDoubleOrNull()
+                if (lat == null || lon == null || lat !in -90.0..90.0 || lon !in -180.0..180.0) {
+                    toast("تحقق من صحة خط العرض وخط الطول")
+                } else {
+                    formLat = lat; formLon = lon; formAltitude = null; formAccuracy = null; formAltitudeAccuracy = null; formAltitudeReference = ""
+                    formLocationCapturedAt = System.currentTimeMillis(); formLocationProvider = "manual"
+                    locationStatusView?.text = locationText(); toast("تم اعتماد الموقع اليدوي"); dialog.dismiss()
+                }
+            }
+        }
+        actions.addView(cancel, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(5) })
+        actions.addView(save, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(5) })
+        wrap.addView(actions)
+
+        dialog.setContentView(wrap)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnShowListener { dialog.window?.setLayout((resources.displayMetrics.widthPixels * .94f).toInt(), (resources.displayMetrics.heightPixels * .86f).toInt()) }
+        dialog.show()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            REQ_CAMERA -> if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) launchCameraIntent() else { quickCapturePending = false; toast("يجب السماح للكاميرا") }
+            REQ_LOCATION -> if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) captureLocation() else toast("يجب السماح بالوصول إلى الموقع")
+        }
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) {
+            if (requestCode == REQ_CAMERA) quickCapturePending = false
+            return
+        }
+        when (requestCode) {
+            REQ_CAMERA -> {
+                cameraUri?.let { uri ->
+                    if (quickCapturePending) {
+                        quickCapturePending = false
+                        saveQuickObservation(uri.toString())
+                    } else {
+                        addFormImage(uri.toString())
+                    }
+                }
+            }
+            REQ_GALLERY -> {
+                val uris = mutableListOf<Uri>()
+                data?.clipData?.let { clip -> for (i in 0 until clip.itemCount) uris += clip.getItemAt(i).uri }
+                if (uris.isEmpty()) data?.data?.let(uris::add)
+                uris.distinct().forEach { uri ->
+                    runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                    addFormImage(uri.toString())
+                }
+            }
+            REQ_EXPORT -> data?.data?.let { uri ->
+                try { backupManager.exportTo(uri); toast("تم تصدير النسخة الاحتياطية بنجاح") } catch (e: Exception) { toast("تعذر التصدير: ${e.message ?: "خطأ غير معروف"}") }
+            }
+            REQ_IMPORT -> data?.data?.let { uri ->
+                try { val count = backupManager.importFrom(uri); toast("تم استيراد $count رصد بنجاح"); showHome() } catch (e: Exception) { toast("تعذر الاستيراد: ${e.message ?: "ملف غير صالح"}") }
+            }
+        }
+    }
+
+
+    private fun simpleTopBar(title: String, back: () -> Unit): View {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(7), dp(12), dp(7))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(GREEN, GREEN_DARK)
+            )
+            minimumHeight = dp(66)
+        }
+        bar.addView(text(title, 20.5f, Color.WHITE, true).apply {
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+        }, LinearLayout.LayoutParams(0, -1, 1f))
+        bar.addView(iconButton(R.drawable.ic_arrow_back, Color.WHITE, 44).apply {
+            background = circle(Color.argb(28, 255, 255, 255))
+            setOnClickListener { back() }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        return bar
+    }
+
+    private fun input(parent: LinearLayout, label: String, hint: String, multiline: Boolean, value: String): EditText {
+        label(parent, label)
+        val e = EditText(this).apply {
+            this.hint = hint; setText(value); textSize = 16f; setTextColor(INK); setHintTextColor(Color.rgb(155, 161, 157)); typeface = appTypeface; gravity = Gravity.RIGHT or if (multiline) Gravity.TOP else Gravity.CENTER_VERTICAL
+            background = rounded(CARD, 16f, strokeColor = LINE); setPadding(dp(14), dp(10), dp(14), dp(10))
+            if (multiline) { minLines = 3; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE } else inputType = InputType.TYPE_CLASS_TEXT
+            setOnFocusChangeListener { v, hasFocus ->
+                if (hasFocus) {
+                    v.postDelayed({
+                        val rect = android.graphics.Rect(0, 0, v.width, v.height + dp(40))
+                        v.requestRectangleOnScreen(rect, true)
+                    }, 280)
+                }
+            }
+        }
+        parent.addView(e, LinearLayout.LayoutParams(-1, if (multiline) dp(112) else dp(58)).apply { bottomMargin = dp(10) })
+        return e
+    }
+
+    private fun label(parent: LinearLayout, s: String) {
+        parent.addView(text(s, 14f, MUTED, true).apply { gravity = Gravity.RIGHT; setPadding(dp(4), dp(7), dp(4), dp(6)) })
+    }
+
+    private fun fieldLp() = LinearLayout.LayoutParams(-1, dp(58)).apply { bottomMargin = dp(10) }
+
+    private fun spinner(items: Array<String>): Spinner = Spinner(this).apply {
+        adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View = super.getView(position, convertView, parent).also { (it as? TextView)?.apply { typeface = appTypeface; textSize = 15f; gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL; setTextColor(INK); setPadding(dp(12),0,dp(12),0) } }
+            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View = super.getDropDownView(position, convertView, parent).also { (it as? TextView)?.apply { typeface = appTypeface; textSize = 15f; gravity = Gravity.RIGHT; setPadding(dp(14),dp(12),dp(14),dp(12)) } }
+        }
+        background = rounded(CARD, 16f, strokeColor = LINE); setPadding(dp(10),0,dp(10),0)
+    }
+
+    private fun chipText(s: String): TextView = text(s, 14f, GREEN, true).apply { gravity = Gravity.RIGHT; background = rounded(Color.rgb(234, 246, 240), 14f); setPadding(dp(12), dp(7), dp(12), dp(7)) }
+
+
+    private fun infoBlock(label: String, value: String): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(CARD, 16f, strokeColor = LINE)
+            setPadding(dp(14), dp(11), dp(14), dp(11))
+        }
+        box.addView(text(label, 12.5f, TEAL, true).apply { gravity = Gravity.RIGHT })
+        box.addView(text(value, 15.5f, INK, false).apply {
+            gravity = Gravity.RIGHT
+            setPadding(0, dp(4), 0, 0)
+        })
+        return box.also {
+            it.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(9) }
+        }
+    }
+
+    private fun sectionCard(title: String, rows: List<Pair<String, String>>): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(CARD, 20f, strokeColor = LINE)
+            setPadding(dp(15), dp(13), dp(15), dp(8))
+            elevation = dp(1).toFloat()
+        }
+        val heading = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val mark = View(this).apply { background = rounded(GOLD, 2f) }
+        heading.addView(mark, LinearLayout.LayoutParams(dp(4), dp(21)).apply { marginEnd = dp(8) })
+        heading.addView(text(title, 16f, INK, true).apply { gravity = Gravity.RIGHT }, LinearLayout.LayoutParams(0, -2, 1f))
+        card.addView(heading)
+
+        rows.forEachIndexed { index, pair ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
+            }
+            row.addView(text(pair.first, 11.8f, TEAL, true).apply { gravity = Gravity.RIGHT })
+            row.addView(text(pair.second, 14.5f, INK, false).apply {
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(3), 0, 0)
+            })
+            card.addView(row)
+            if (index != rows.lastIndex) {
+                card.addView(
+                    View(this).apply { setBackgroundColor(Color.rgb(237, 234, 226)) },
+                    LinearLayout.LayoutParams(-1, dp(1))
+                )
+            }
+        }
+        return card.also {
+            it.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+        }
+    }
+
+    private fun metaChip(label: String, bg: Int, fg: Int, textSizeSp: Float = 12f): TextView =
+        text(label, textSizeSp, fg, true).apply {
+            gravity = Gravity.CENTER
+            background = rounded(bg, 12f)
+            setPadding(dp(9), dp(4), dp(9), dp(4))
+            minHeight = dp(28)
+        }
+
+    private fun categoryColor(category: String): Int = when (category) {
+        "أحجار وصخور" -> Color.rgb(112, 94, 78)
+        "أشجار" -> Color.rgb(57, 112, 73)
+        "نباتات" -> Color.rgb(75, 126, 78)
+        "آثار" -> Color.rgb(159, 111, 57)
+        "حشرات وحيوانات" -> Color.rgb(140, 91, 59)
+        "تكوينات طبيعية" -> Color.rgb(55, 113, 126)
+        else -> TEAL
+    }
+
+    private fun categorySoftColor(category: String): Int = when (category) {
+        "أحجار وصخور" -> Color.rgb(242, 238, 233)
+        "أشجار" -> Color.rgb(233, 243, 235)
+        "نباتات" -> Color.rgb(235, 245, 235)
+        "آثار" -> Color.rgb(248, 239, 226)
+        "حشرات وحيوانات" -> Color.rgb(247, 237, 229)
+        "تكوينات طبيعية" -> Color.rgb(231, 243, 246)
+        else -> MIST
+    }
+
+    private fun rarityColor(rarity: String): Int = when (rarity) {
+        "نادر جدًا" -> Color.rgb(164, 72, 59)
+        "غير مألوف" -> Color.rgb(181, 121, 49)
+        else -> GREEN
+    }
+
+    private fun raritySoftColor(rarity: String): Int = when (rarity) {
+        "نادر جدًا" -> Color.rgb(249, 235, 232)
+        "غير مألوف" -> Color.rgb(250, 241, 224)
+        else -> Color.rgb(235, 244, 238)
+    }
+
+    private fun actionButton(label: String, icon: Int, bg: Int, fg: Int): Button = Button(this).apply {
+        text = label; textSize = 16f; setTextColor(fg); typeface = appTypeface; gravity = Gravity.CENTER; background = rounded(bg, 17f); isAllCaps = false
+        val d = getDrawable(icon)?.mutate(); d?.setTint(fg); d?.setBounds(0,0,dp(24),dp(24)); setCompoundDrawablesRelative(d, null, null, null); compoundDrawablePadding = dp(8); setPadding(dp(10),0,dp(10),0)
+    }
+
+    private fun iconButton(res: Int, color: Int, size: Int): ImageButton = ImageButton(this).apply {
+        setImageResource(res); setColorFilter(color); scaleType = ImageView.ScaleType.CENTER_INSIDE; setPadding(dp(11), dp(11), dp(11), dp(11)); minimumWidth = dp(size); minimumHeight = dp(size)
+    }
+
+    private fun iconView(res: Int, color: Int, size: Int): ImageView = ImageView(this).apply {
