@@ -1,0 +1,238 @@
+            item.placeName.isNotBlank() -> item.placeName
+            else -> "لا يوجد موقع مسجل"
+        }
+        val locationTop = tileTop2 + tileH + h * .014f
+        val locationH = h * .072f
+        drawWideBlock(canvas, "الموقع", location, RectF(margin, locationTop, w - margin, locationTop + locationH), 2)
+
+        var textTop = locationTop + locationH + h * .014f
+        if (item.description.isNotBlank()) {
+            val descriptionH = h * .083f
+            drawWideBlock(canvas, "الوصف", item.description, RectF(margin, textTop, w - margin, textTop + descriptionH), 3)
+            textTop += descriptionH + h * .011f
+        }
+
+        val secondary = buildString {
+            if (item.notes.isNotBlank()) append("ملاحظات: ${item.notes}")
+            if (item.tags.isNotBlank()) {
+                if (isNotEmpty()) append("\n")
+                append("وسوم: ${item.tags}")
+            }
+        }
+        if (secondary.isNotBlank()) {
+            drawWideBlock(canvas, "تفاصيل إضافية", secondary, RectF(margin, textTop, w - margin, textTop + h * .075f), 2)
+        }
+
+        if (item.latitude != null && item.longitude != null) {
+            val qrSize = w * .105f
+            val qrTop = h * .845f
+            val qrRect = RectF(margin, qrTop, margin + qrSize, qrTop + qrSize)
+            drawQr(canvas, item, qrRect)
+            val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = teal
+                textSize = w * .018f
+                textAlign = Paint.Align.CENTER
+                typeface = this@ObservationPrintAdapter.typeface
+            }
+            canvas.drawText("افتح الموقع", qrRect.centerX(), qrRect.bottom + h * .015f, label)
+        }
+
+        drawFooter(canvas, pageIndex + 1)
+    }
+
+    private fun drawInfoTile(canvas: Canvas, label: String, value: String, rect: RectF) {
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = sand }
+        canvas.drawRoundRect(rect, rect.height() * .18f, rect.height() * .18f, fill)
+        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = teal
+            textSize = rect.width() * .047f
+            textAlign = Paint.Align.RIGHT
+            typeface = Typeface.create(this@ObservationPrintAdapter.typeface, Typeface.BOLD)
+        }
+        canvas.drawText(label, rect.right - rect.width() * .06f, rect.top + rect.height() * .34f, labelPaint)
+        drawWrappedRight(
+            canvas,
+            value,
+            rect.left + rect.width() * .06f,
+            rect.top + rect.height() * .47f,
+            rect.width() * .88f,
+            rect.width() * .054f,
+            ink,
+            1,
+            false
+        )
+    }
+
+    private fun drawWideBlock(canvas: Canvas, label: String, value: String, rect: RectF, maxLines: Int) {
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = card }
+        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = line
+            style = Paint.Style.STROKE
+            strokeWidth = rect.width() * .0018f
+        }
+        canvas.drawRoundRect(rect, rect.height() * .13f, rect.height() * .13f, fill)
+        canvas.drawRoundRect(rect, rect.height() * .13f, rect.height() * .13f, border)
+        val pad = rect.width() * .025f
+        val lp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = teal
+            textSize = rect.width() * .022f
+            textAlign = Paint.Align.RIGHT
+            typeface = Typeface.create(this@ObservationPrintAdapter.typeface, Typeface.BOLD)
+        }
+        canvas.drawText(label, rect.right - pad, rect.top + rect.height() * .31f, lp)
+        drawWrappedRight(canvas, value, rect.left + pad, rect.top + rect.height() * .43f, rect.width() - pad * 2, rect.width() * .024f, ink, maxLines, false)
+    }
+
+    private fun gpsSummary(item: Observation): String {
+        val parts = mutableListOf<String>()
+        item.accuracy?.let { parts += "دقة الموقع ±${it.toInt()}م" }
+        item.altitude?.let {
+            val label = if (item.altitudeReference == "MSL") "الارتفاع عن سطح البحر" else "الارتفاع"
+            val a = item.altitudeAccuracy?.let { acc -> " ±${acc.toInt()}م" }.orEmpty()
+            parts += "$label ${String.format(Locale.US, "%,.0f", it)}م$a"
+        }
+        item.locationCapturedAt?.let { parts += "التقاط ${SimpleDateFormat("dd/MM HH:mm", Locale("ar")).format(Date(it))}" }
+        return parts.joinToString("  •  ")
+    }
+
+    private fun drawQr(canvas: Canvas, item: Observation, dst: RectF) {
+        val lat = item.latitude ?: return
+        val lon = item.longitude ?: return
+        try {
+            val content = "https://maps.google.com/?q=${String.format(Locale.US, "%.6f", lat)},${String.format(Locale.US, "%.6f", lon)}"
+            val size = 256
+            val hints = EnumMap<EncodeHintType, Any>(EncodeHintType::class.java).apply { put(EncodeHintType.MARGIN, 1) }
+            val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size, hints)
+            val pixels = IntArray(size * size)
+            for (y in 0 until size) {
+                for (x in 0 until size) {
+                    pixels[y * size + x] = if (matrix[x, y]) Color.BLACK else Color.WHITE
+                }
+            }
+            val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            bmp.setPixels(pixels, 0, size, 0, 0, size, size)
+            canvas.drawBitmap(bmp, null, dst, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            bmp.recycle()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun drawFooter(canvas: Canvas, page: Int) {
+        val w = canvas.width.toFloat()
+        val h = canvas.height.toFloat()
+        val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = line; strokeWidth = h * .001f }
+        canvas.drawLine(w * .065f, h * .958f, w * .935f, h * .958f, linePaint)
+
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = w * .018f
+            color = muted
+            textAlign = Paint.Align.CENTER
+            typeface = this@ObservationPrintAdapter.typeface
+        }
+        canvas.drawText("$page / $pageCount", w / 2f, h * .977f, p)
+
+        p.textAlign = Paint.Align.RIGHT
+        p.color = forest
+        canvas.drawText("راصد البرية", w * .935f, h * .977f, p)
+    }
+
+    private fun drawImage(canvas: Canvas, uriString: String, dst: RectF) {
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = sand }
+        val radius = dst.width() * .035f
+        canvas.drawRoundRect(dst, radius, radius, bg)
+        val bmp = decode(uriString) ?: run {
+            drawImagePlaceholder(canvas, dst)
+            return
+        }
+
+        val srcRatio = bmp.width.toFloat() / bmp.height.coerceAtLeast(1)
+        val dstRatio = dst.width() / dst.height().coerceAtLeast(1f)
+        val src = if (srcRatio > dstRatio) {
+            val wanted = (bmp.height * dstRatio).toInt()
+            val x = (bmp.width - wanted) / 2
+            android.graphics.Rect(x, 0, x + wanted, bmp.height)
+        } else {
+            val wanted = (bmp.width / dstRatio).toInt()
+            val y = (bmp.height - wanted) / 2
+            android.graphics.Rect(0, y, bmp.width, y + wanted)
+        }
+
+        val clip = Path().apply { addRoundRect(dst, radius, radius, Path.Direction.CW) }
+        canvas.save()
+        canvas.clipPath(clip)
+        canvas.drawBitmap(bmp, src, dst, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+        canvas.restore()
+        bmp.recycle()
+    }
+
+    private fun drawImagePlaceholder(canvas: Canvas, dst: RectF) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(200, 207, 201)
+            style = Paint.Style.STROKE
+            strokeWidth = dst.width() * .008f
+        }
+        val cx = dst.centerX()
+        val cy = dst.centerY() - dst.height() * .03f
+        canvas.drawCircle(cx, cy, dst.width() * .08f, p)
+        p.style = Paint.Style.FILL
+        p.color = muted
+        p.textAlign = Paint.Align.CENTER
+        p.textSize = dst.width() * .055f
+        p.typeface = this@ObservationPrintAdapter.typeface
+        canvas.drawText("لا توجد صورة", cx, cy + dst.height() * .18f, p)
+    }
+
+    private fun decode(uriString: String): Bitmap? {
+        if (uriString.isBlank()) return null
+        return try {
+            val uri = Uri.parse(uriString)
+            val input = if (uri.scheme == "file") FileInputStream(File(requireNotNull(uri.path))) else context.contentResolver.openInputStream(uri)
+            input?.use { BitmapFactory.decodeStream(it) }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun drawWrappedRight(
+        canvas: Canvas,
+        text: String,
+        left: Float,
+        top: Float,
+        width: Float,
+        textSize: Float,
+        color: Int,
+        maxLines: Int,
+        bold: Boolean
+    ): Float {
+        if (text.isBlank() || width <= 4f) return top
+        val tp = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            this.textSize = textSize
+            this.color = color
+            typeface = if (bold) Typeface.create(this@ObservationPrintAdapter.typeface, Typeface.BOLD) else this@ObservationPrintAdapter.typeface
+        }
+        val layout = StaticLayout.Builder.obtain(text, 0, text.length, tp, width.toInt())
+            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setTextDirection(TextDirectionHeuristics.RTL)
+            .setIncludePad(false)
+            .setMaxLines(maxLines)
+            .setEllipsize(TextUtils.TruncateAt.END)
+            .build()
+        canvas.save()
+        canvas.translate(left, top)
+        layout.draw(canvas)
+        canvas.restore()
+        return top + layout.height
+    }
+
+    private fun categoryColor(category: String): Int = when (category) {
+        "أحجار وصخور" -> Color.rgb(112, 94, 78)
+        "أشجار" -> Color.rgb(57, 112, 73)
+        "نباتات" -> Color.rgb(75, 126, 78)
+        "آثار" -> Color.rgb(159, 111, 57)
+        "حشرات وحيوانات" -> Color.rgb(140, 91, 59)
+        "تكوينات طبيعية" -> Color.rgb(55, 113, 126)
+        else -> teal
+    }
+
+    private fun date(ms: Long): String = SimpleDateFormat("dd MMMM yyyy", Locale("ar")).format(Date(ms))
+}
