@@ -1,0 +1,211 @@
+        formAccuracy?.let { parts += "دقة الموقع ±${it.toInt()} م" }
+        formAltitude?.let {
+            val label = if (formAltitudeReference == "MSL") "عن سطح البحر" else "ارتفاع GPS"
+            val a = formAltitudeAccuracy?.let { acc -> " ±${acc.toInt()} م" }.orEmpty()
+            parts += "$label ${String.format(Locale.US, "%,.0f", it)} م$a"
+        }
+        if (formAccuracy != null) parts += locationQuality(formAccuracy)
+        return if (parts.isEmpty()) first else "$first\n${parts.joinToString("  ·  ")}"
+    }
+
+    private fun locationQuality(accuracy: Float?): String = when {
+        accuracy == null -> "دقة غير محددة"
+        accuracy <= 6f -> "دقة ممتازة جدًا"
+        accuracy <= 10f -> "دقة ممتازة"
+        accuracy <= 25f -> "دقة جيدة"
+        accuracy <= 60f -> "دقة مقبولة"
+        else -> "دقة ضعيفة"
+    }
+
+    private fun altitudeQuality(accuracy: Float?): String = when {
+        accuracy == null -> "دقة الارتفاع غير محددة"
+        accuracy <= 8f -> "دقة ارتفاع ممتازة"
+        accuracy <= 15f -> "دقة ارتفاع جيدة"
+        accuracy <= 30f -> "دقة ارتفاع مقبولة"
+        else -> "دقة ارتفاع ضعيفة"
+    }
+
+    private fun gpsDetailsText(item: Observation): String {
+        val lines = mutableListOf<String>()
+        item.accuracy?.let { lines += "دقة الموقع: ±${it.toInt()} متر — ${locationQuality(it)}" }
+        item.altitudeAccuracy?.let { lines += "دقة الارتفاع: ±${it.toInt()} متر — ${altitudeQuality(it)}" }
+        item.altitudeReference.takeIf { it.isNotBlank() }?.let { lines += "مرجع الارتفاع: ${if (it == "MSL") "متوسط مستوى سطح البحر (MSL)" else "WGS84"}" }
+        item.locationCapturedAt?.let { lines += "وقت التقاط الموقع: ${dateTime(it)}" }
+        item.locationProvider.takeIf { it.isNotBlank() }?.let { lines += "مصدر الموقع: ${if (it == "manual") "يدوي" else it}" }
+        return lines.joinToString("\n")
+    }
+
+    private fun addFormImage(uriString: String) {
+        if (uriString.isBlank()) return
+        if (uriString !in formImageUris) formImageUris += uriString
+        if (formImageUris.isNotEmpty()) formImageUri = formImageUris.first()
+        refreshFormImages()
+    }
+
+    private fun refreshFormImages() {
+        formImageUri = formImageUris.firstOrNull().orEmpty()
+        formImageView?.let { loadImage(it, formImageUri, 900) }
+        val strip = formImageStrip ?: return
+        strip.removeAllViews()
+        formImageUris.toList().forEach { uri ->
+            val thumb = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = rounded(if (uri == formImageUri) Color.rgb(225, 242, 235) else Color.rgb(238, 240, 236), 10f, strokeColor = if (uri == formImageUri) GREEN else Color.rgb(220, 224, 220), strokeWidth = if (uri == formImageUri) 2 else 1)
+                loadImage(this, uri, 180)
+                setOnClickListener {
+                    formImageUris.remove(uri)
+                    formImageUris.add(0, uri)
+                    refreshFormImages()
+                }
+                setOnLongClickListener {
+                    formImageUris.remove(uri)
+                    refreshFormImages()
+                    toast("تم حذف الصورة من الرصد")
+                    true
+                }
+            }
+            strip.addView(thumb, LinearLayout.LayoutParams(dp(66), dp(66)).apply { marginEnd = dp(7) })
+        }
+        if (formImageUris.isEmpty()) {
+            strip.addView(text("لا توجد صور مضافة", 12f, MUTED, false).apply { gravity = Gravity.CENTER_VERTICAL }, LinearLayout.LayoutParams(-2, dp(66)))
+        }
+    }
+
+    private fun startQuickCapture() {
+        quickCapturePending = true
+        val needed = mutableListOf<String>()
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) needed += Manifest.permission.CAMERA
+        if (Build.VERSION.SDK_INT <= 28 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) needed += Manifest.permission.WRITE_EXTERNAL_STORAGE
+        if (needed.isNotEmpty()) requestPermissions(needed.toTypedArray(), REQ_CAMERA) else launchCameraIntent()
+    }
+
+    private fun bestKnownLocation(maxAgeMs: Long = 30 * 60 * 1000L): Location? {
+        val fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) return null
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+        val now = System.currentTimeMillis()
+        return runCatching {
+            lm.allProviders.distinct().mapNotNull { provider -> runCatching { lm.getLastKnownLocation(provider) }.getOrNull() }
+                .filter { it.latitude in -90.0..90.0 && it.longitude in -180.0..180.0 && now - it.time in 0..maxAgeMs }
+                .sortedWith(compareByDescending<Location> { it.time }.thenBy { if (it.hasAccuracy()) it.accuracy else 99999f })
+                .firstOrNull()
+        }.getOrNull()
+    }
+
+    private fun saveQuickObservation(imageUri: String) {
+        val loc = bestKnownLocation()
+        val now = System.currentTimeMillis()
+        val trip = getSharedPreferences("rased_prefs", MODE_PRIVATE).getString("last_trip", "").orEmpty()
+        val title = "رصد سريع - ${SimpleDateFormat("dd MMM HH:mm", Locale("ar")).format(Date(now))}"
+        val item = Observation(
+            title = title,
+            category = "أخرى",
+            rarity = "ملفت",
+            imageUri = imageUri,
+            imageUris = listOf(imageUri),
+            latitude = loc?.latitude,
+            longitude = loc?.longitude,
+            altitude = loc?.takeIf { it.hasAltitude() }?.let { l -> mslAltitudeCompat(l) ?: l.altitude },
+            accuracy = loc?.takeIf { it.hasAccuracy() }?.accuracy,
+            altitudeAccuracy = loc?.let { l -> mslAltitudeAccuracyCompat(l) ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && l.hasVerticalAccuracy()) l.verticalAccuracyMeters else null },
+            altitudeReference = loc?.let { l -> if (mslAltitudeCompat(l) != null) "MSL" else if (l.hasAltitude()) "WGS84" else "" }.orEmpty(),
+            locationCapturedAt = loc?.time?.takeIf { it > 0L },
+            locationProvider = loc?.provider.orEmpty(),
+            tripName = trip,
+            createdAt = now,
+            quickDraft = true
+        )
+        val id = db.save(item)
+        if (loc != null) toast("تم حفظ الرصد السريع مع الموقع كمسودة") else toast("تم حفظ الرصد السريع كمسودة — أكمل الموقع لاحقًا")
+        showDetail(id)
+    }
+
+    private fun showTripFilterDialog() {
+        val options = listOf("كل الرحلات") + db.tripNames()
+        val checked = options.indexOf(selectedTrip).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("تصفية حسب الرحلة")
+            .setSingleChoiceItems(options.toTypedArray(), checked) { dialog, which ->
+                selectedTrip = options[which]
+                dialog.dismiss()
+                showHome()
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private fun showTripPrintDialog() {
+        val trips = db.tripNames()
+        if (trips.isEmpty()) { toast("لا توجد رحلات مسجلة"); return }
+        AlertDialog.Builder(this)
+            .setTitle("اختر الرحلة للطباعة")
+            .setItems(trips.toTypedArray()) { _, which ->
+                val items = db.byTrip(trips[which])
+                if (items.isEmpty()) toast("لا توجد أرصاد في هذه الرحلة") else printItems(items, false)
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private fun showManualLocationPicker() {
+        val dialog = Dialog(this)
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            background = rounded(Color.WHITE, 22f)
+        }
+        wrap.addView(text("تحديد الموقع يدويًا", 22f, INK, true).apply { gravity = Gravity.RIGHT })
+        wrap.addView(text("اضغط على الخريطة لتحديد النقطة، أو اكتب الإحداثيات يدويًا إذا لم تتوفر الإنترنت.", 12.5f, MUTED, false).apply { gravity = Gravity.RIGHT; setPadding(0, dp(4), 0, dp(8)) })
+
+        val latEdit = EditText(this).apply {
+            hint = "خط العرض"; textSize = 14f; setTextColor(INK); setHintTextColor(MUTED); typeface = appTypeface
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+            gravity = Gravity.CENTER; background = rounded(Color.rgb(250,250,248), 13f, strokeColor = Color.rgb(220,222,218)); setPadding(dp(8),0,dp(8),0)
+            formLat?.let { setText(String.format(Locale.US, "%.6f", it)) }
+        }
+        val lonEdit = EditText(this).apply {
+            hint = "خط الطول"; textSize = 14f; setTextColor(INK); setHintTextColor(MUTED); typeface = appTypeface
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+            gravity = Gravity.CENTER; background = rounded(Color.rgb(250,250,248), 13f, strokeColor = Color.rgb(220,222,218)); setPadding(dp(8),0,dp(8),0)
+            formLon?.let { setText(String.format(Locale.US, "%.6f", it)) }
+        }
+        val coords = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        coords.addView(latEdit, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
+        coords.addView(lonEdit, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
+        wrap.addView(coords, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(8) })
+
+        val centerLat = formLat ?: 24.7136
+        val centerLon = formLon ?: 46.6753
+        val web = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            webViewClient = WebViewClient()
+            addJavascriptInterface(object {
+                @JavascriptInterface
+                fun pick(lat: Double, lon: Double) {
+                    runOnUiThread {
+                        latEdit.setText(String.format(Locale.US, "%.6f", lat))
+                        lonEdit.setText(String.format(Locale.US, "%.6f", lon))
+                    }
+                }
+            }, "Android")
+        }
+        val html = """
+            <!doctype html><html dir="rtl"><head><meta name="viewport" content="width=device-width,initial-scale=1">
+            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+            <style>html,body,#map{height:100%;margin:0} .leaflet-control-attribution{font-size:8px}</style></head><body><div id="map"></div>
+            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+            var map=L.map('map').setView([$centerLat,$centerLon], ${if (formLat != null) 15 else 5});
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+            var marker=L.marker([$centerLat,$centerLon]).addTo(map);
+            map.on('click',function(e){marker.setLatLng(e.latlng); if(window.Android){Android.pick(e.latlng.lat,e.latlng.lng);}});
+            </script></body></html>
+        """.trimIndent()
+        web.loadDataWithBaseURL("https://unpkg.com/", html, "text/html", "UTF-8", null)
+        wrap.addView(web, LinearLayout.LayoutParams(-1, dp(310)).apply { bottomMargin = dp(8) })
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        val cancel = actionButton("إلغاء", R.drawable.ic_arrow_back, Color.rgb(238,240,236), INK).apply { setOnClickListener { dialog.dismiss() } }
+        val save = actionButton("اعتماد الموقع", R.drawable.ic_location, GREEN, Color.WHITE).apply {
+            setOnClickListener {
