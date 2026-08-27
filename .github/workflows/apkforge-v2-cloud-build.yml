@@ -37,7 +37,6 @@ jobs:
           unzip -t /tmp/apkforge-src.zip >/dev/null
           mkdir -p apkforge
           unzip -q /tmp/apkforge-src.zip -d apkforge
-          sed -i 's/applicationId = "com.aboryan.apkforge"/applicationId = "com.aboryan.apkforge.v2"/' apkforge/app/build.gradle.kts
 
       - uses: actions/setup-java@v4
         with:
@@ -50,17 +49,90 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 36
-        shell: bash
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Test and build
+      - name: Install Android SDK platforms
         shell: bash
         run: |
           set -euo pipefail
-          gradle -p apkforge :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-34" "platforms;android-35" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Patch cloud build config
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > apkforge/app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+          }
+
+          android {
+              namespace = "com.aboryan.apkforge"
+              compileSdk = 36
+
+              defaultConfig {
+                  applicationId = "com.aboryan.apkforge.v2"
+                  minSdk = 26
+                  targetSdk = 36
+                  versionCode = 27
+                  versionName = "2.0.0-cloud2"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              packaging {
+                  jniLibs.useLegacyPackaging = true
+                  resources.excludes += setOf(
+                      "META-INF/DEPENDENCIES",
+                      "META-INF/LICENSE*",
+                      "META-INF/NOTICE*"
+                  )
+              }
+          }
+
+          dependencies {
+              implementation("com.github.PranavPurwar:kotlinc-android:8a8572b26b")
+              implementation("org.jetbrains.kotlin:kotlin-reflect:2.4.0")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+              implementation("io.github.reandroid:ARSCLib:1.4.0")
+              implementation("com.android.tools.build:apksig:2.3.0")
+              implementation("com.android.tools:r8:8.13.19")
+              testImplementation("junit:junit:4.13.2")
+          }
+          EOF
+
+      - name: Prepare embedded on-device toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOL=apkforge/app/src/main/assets/toolchain
+          mkdir -p "$TOOL"
+          for api in 34 35 36; do
+            cp "$ANDROID_SDK_ROOT/platforms/android-$api/android.jar" "$TOOL/android-$api.jar"
+          done
+          curl -fL --retry 3 --retry-delay 2 \
+            -o "$TOOL/kotlin-stdlib.jar" \
+            "https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.4.0/kotlin-stdlib-2.4.0.jar"
+          mkdir -p apkforge/app/src/main/jniLibs/arm64-v8a apkforge/app/src/main/jniLibs/armeabi-v7a
+          curl -fL --retry 3 --retry-delay 2 \
+            -o apkforge/app/src/main/jniLibs/arm64-v8a/libapkforge_aapt2.so \
+            "https://github.com/ReVanced/aapt2/releases/download/v1.1.0/aapt2-arm64-v8a"
+          curl -fL --retry 3 --retry-delay 2 \
+            -o apkforge/app/src/main/jniLibs/armeabi-v7a/libapkforge_aapt2.so \
+            "https://github.com/ReVanced/aapt2/releases/download/v1.1.0/aapt2-armeabi-v7a"
+          echo "7e5ae2e1f62fc24cab14072555ffd0a1a7e1ce27e82cc1008967b835b6d8df5b  apkforge/app/src/main/jniLibs/arm64-v8a/libapkforge_aapt2.so" | sha256sum -c -
+          echo "466124dc6a412c39cb970a12ccaf2df054abf6f6e63e78690cd7b6e53263bd86  apkforge/app/src/main/jniLibs/armeabi-v7a/libapkforge_aapt2.so" | sha256sum -c -
+          chmod +x apkforge/app/src/main/jniLibs/*/libapkforge_aapt2.so
+          ls -lh "$TOOL" apkforge/app/src/main/jniLibs/*/libapkforge_aapt2.so
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p apkforge :app:assembleDebug --stacktrace --no-daemon
 
       - name: Verify APK
         shell: bash
@@ -71,17 +143,20 @@ jobs:
           unzip -t "$APK" >/dev/null
           test -n "$(unzip -Z1 "$APK" | grep -E '^classes([0-9]*)?\.dex$' | head -1)"
           test -n "$(unzip -Z1 "$APK" | grep '^AndroidManifest.xml$')"
+          unzip -Z1 "$APK" | grep -q '^assets/toolchain/android-36.jar$'
+          unzip -Z1 "$APK" | grep -q '^assets/toolchain/kotlin-stdlib.jar$'
+          unzip -Z1 "$APK" | grep -q '^lib/arm64-v8a/libapkforge_aapt2.so$'
           BADGING="$($ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2 dump badging "$APK")"
           echo "$BADGING"
           echo "$BADGING" | grep "package: name='com.aboryan.apkforge.v2'"
           mkdir -p dist
-          cp "$APK" dist/APKForge-v2.0.0-cloud1.apk
-          sha256sum dist/APKForge-v2.0.0-cloud1.apk | tee dist/APKForge-v2.0.0-cloud1-SHA256.txt
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose dist/APKForge-v2.0.0-cloud1.apk
+          cp "$APK" dist/APKForge-v2.0.0-cloud2.apk
+          sha256sum dist/APKForge-v2.0.0-cloud2.apk | tee dist/APKForge-v2.0.0-cloud2-SHA256.txt
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose dist/APKForge-v2.0.0-cloud2.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: APKForge-v2.0.0-cloud1
+          name: APKForge-v2.0.0-cloud2
           path: dist/*
           if-no-files-found: error
           retention-days: 7
