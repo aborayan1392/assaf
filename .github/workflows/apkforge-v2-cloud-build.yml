@@ -1,0 +1,70 @@
+name: Build APKForge v2 Cloud
+
+on:
+  push:
+    branches: [apkforge-v2-cloud-build-20260827]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat build-input/apkforge-src.b64.part_* > /tmp/apkforge-src.b64
+          base64 -d /tmp/apkforge-src.b64 > /tmp/apkforge-src.zip
+          mkdir -p apkforge
+          unzip -q /tmp/apkforge-src.zip -d apkforge
+          echo "Source SHA256: $(sha256sum /tmp/apkforge-src.zip | cut -d' ' -f1)"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Test and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p apkforge :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="apkforge/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          unzip -t "$APK" >/dev/null
+          test -n "$(unzip -Z1 "$APK" | grep -E '^classes([0-9]*)?\.dex$' | head -1)"
+          test -n "$(unzip -Z1 "$APK" | grep '^AndroidManifest.xml$')"
+          mkdir -p dist
+          cp "$APK" dist/APKForge-v2.0.0-cloud1.apk
+          sha256sum dist/APKForge-v2.0.0-cloud1.apk | tee dist/APKForge-v2.0.0-cloud1-SHA256.txt
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose dist/APKForge-v2.0.0-cloud1.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: APKForge-v2.0.0-cloud1
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
