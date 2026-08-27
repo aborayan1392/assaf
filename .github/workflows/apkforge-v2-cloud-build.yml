@@ -14,14 +14,27 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Reconstruct source ZIP
         shell: bash
         run: |
           set -euo pipefail
-          cat build-input/apkforge-src.b64.part_* > /tmp/apkforge-src.b64
+          : > /tmp/apkforge-src.b64
+          cat build-input/apkforge-src.b64.part_00 >> /tmp/apkforge-src.b64
+          cat build-input/apkforge-src.b64.part_01 >> /tmp/apkforge-src.b64
+          cat build-input/apkforge-src.b64.part_02 >> /tmp/apkforge-src.b64
+          cat build-input/apkforge-src.b64.part_03 >> /tmp/apkforge-src.b64
+          cat build-input/apkforge-src.b64.part_04a >> /tmp/apkforge-src.b64
+          cat build-input/apkforge-src.b64.part_04b >> /tmp/apkforge-src.b64
+          cat build-input/apkforge-src.b64.part_05a >> /tmp/apkforge-src.b64
+          cat build-input/apkforge-src.b64.part_05b >> /tmp/apkforge-src.b64
+          git cat-file blob 760b7ebeae29a8fe38d938c2ea49962607bc3daa >> /tmp/apkforge-src.b64
+          test "$(wc -c < /tmp/apkforge-src.b64)" -eq 116976
           base64 -d /tmp/apkforge-src.b64 > /tmp/apkforge-src.zip
           echo "4b9a158f9ae26ec58799e20a8d92934e214108afa059d1f117cb548f7a586e3b  /tmp/apkforge-src.zip" | sha256sum -c -
+          unzip -t /tmp/apkforge-src.zip >/dev/null
           mkdir -p apkforge
           unzip -q /tmp/apkforge-src.zip -d apkforge
           sed -i 's/applicationId = "com.aboryan.apkforge"/applicationId = "com.aboryan.apkforge.v2"/' apkforge/app/build.gradle.kts
