@@ -126,7 +126,18 @@ jobs:
           echo "7e5ae2e1f62fc24cab14072555ffd0a1a7e1ce27e82cc1008967b835b6d8df5b  apkforge/app/src/main/jniLibs/arm64-v8a/libapkforge_aapt2.so" | sha256sum -c -
           echo "466124dc6a412c39cb970a12ccaf2df054abf6f6e63e78690cd7b6e53263bd86  apkforge/app/src/main/jniLibs/armeabi-v7a/libapkforge_aapt2.so" | sha256sum -c -
           chmod +x apkforge/app/src/main/jniLibs/*/libapkforge_aapt2.so
-          ls -lh "$TOOL" apkforge/app/src/main/jniLibs/*/libapkforge_aapt2.so
+
+      - name: Inspect source seen by Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=apkforge/app/src/main/java/com/aboryan/apkforge/SourceProjectBuilder.kt
+          echo '=== SourceProjectBuilder SHA256 ==='
+          sha256sum "$SRC"
+          echo '=== toolchainDir occurrences ==='
+          grep -Rns --exclude-dir=build 'toolchainDir' apkforge || true
+          echo '=== SourceProjectBuilder lines 175-210 ==='
+          nl -ba "$SRC" | sed -n '175,210p'
 
       - name: Build APK
         shell: bash
